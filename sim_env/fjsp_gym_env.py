@@ -295,10 +295,6 @@ class GreenFJSPEnv(gym.Env):
         if options and "weights" in options:
             self.set_objective_weights(options["weights"])
 
-        dr = self.domain_randomization
-        if options and "domain_randomization" in options:
-            dr = bool(options["domain_randomization"])
-
         # Reset all CNC Physical Twins with optional domain randomization
         dr = self.domain_randomization
         if options and "domain_randomization" in options:

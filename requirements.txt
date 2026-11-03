@@ -9,3 +9,4 @@ scipy>=1.11.0
 torch>=2.0.0
 stable-baselines3>=2.0.0
 sb3-contrib>=2.0.0
+pyserial>=3.5

@@ -44,3 +44,11 @@ outputs/
 logs/
 *.log
 
+# PlatformIO
+.pio/
+**/.pio/
+firmware_esp32/.pio/
+.pioenvs/
+.piolibdeps/
+.clangd/
+

@@ -19,6 +19,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+import warnings
 
 # Ensure workspace root is in path when executed directly
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
@@ -108,20 +109,24 @@ def export_maskable_ppo_to_onnx(
     obs_dim = model.observation_space.shape[0]
     dummy_input = torch.randn(1, obs_dim, dtype=torch.float32)
 
-    # Export to ONNX with dynamic batch size
-    torch.onnx.export(
-        actor_network,
-        dummy_input,
-        str(output_onnx_path),
-        input_names=["obs"],
-        output_names=["logits"],
-        dynamic_axes={
-            "obs": {0: "batch_size"},
-            "logits": {0: "batch_size"},
-        },
-        opset_version=opset_version,
-        dynamo=False,
-    )
+    # Export to ONNX with dynamic batch size (suppress legacy TorchScript DeprecationWarning in PyTorch 2.x)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=DeprecationWarning)
+        warnings.filterwarnings("ignore", message=".*legacy TorchScript.*")
+        warnings.filterwarnings("ignore", message=".*The feature will be removed.*")
+        torch.onnx.export(
+            actor_network,
+            dummy_input,
+            str(output_onnx_path),
+            input_names=["obs"],
+            output_names=["logits"],
+            dynamic_axes={
+                "obs": {0: "batch_size"},
+                "logits": {0: "batch_size"},
+            },
+            opset_version=opset_version,
+            dynamo=False,
+        )
 
     # Validate ONNX schema integrity
     onnx_model = onnx.load(str(output_onnx_path))
