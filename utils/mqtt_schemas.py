@@ -14,7 +14,7 @@ Strict Unit Conventions:
 
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -274,13 +274,18 @@ class SystemConfig(BaseModel):
 
 
 # ==============================================================================
-# MQTT Payload Models
+# MQTT Topics & Payload Models
 # ==============================================================================
+
+TOPIC_EDGE_TELEMETRY = "dt/fjsp/edge/telemetry"
+TOPIC_EDGE_TRIGGER_RESCHEDULE = "dt/fjsp/edge/trigger_reschedule"
+TOPIC_CLOUD_SCHEDULE_SYNC = "dt/fjsp/cloud/schedule_sync"
+
 
 class MachineTelemetryPayload(BaseModel):
     """
     Real-time telemetry payload transmitted from physical Breadboard / Edge node
-    to Edge MQTT Broker (Topic: `fjsp/machines/{machine_id}/telemetry`).
+    to Edge/Cloud MQTT Broker (Topic: `dt/fjsp/edge/telemetry`).
     """
     model_config = ConfigDict(use_enum_values=True)
 
@@ -290,6 +295,13 @@ class MachineTelemetryPayload(BaseModel):
     estimated_wear_um: float = Field(..., ge=0.0, description="Current estimated tool wear VB (um)")
     state: Union[MachineState, str] = Field(..., description="Operational status of machine")
     timestamp: float = Field(..., description="Telemetry epoch timestamp or simulation time (min)")
+    cdi: float = Field(0.0, ge=0.0, description="Cumulative Disturbance Index CDI(t)")
+
+    # Optional hardware DAQ specific readings
+    v_bus: Optional[float] = Field(None, ge=0.0, description="Bus voltage (V)")
+    i_amp: Optional[float] = Field(None, ge=0.0, description="Current (A)")
+    p_raw_w: Optional[float] = Field(None, ge=0.0, description="Raw power (W)")
+    p_filt_w: Optional[float] = Field(None, ge=0.0, description="Kalman filtered power (W)")
 
     @field_validator("machine_id")
     @classmethod
@@ -300,10 +312,27 @@ class MachineTelemetryPayload(BaseModel):
         return v_clean
 
 
+class RescheduleTriggerPayload(BaseModel):
+    """
+    Emergency rescheduling trigger payload transmitted from Edge to Cloud
+    when shop-floor disturbance CDI(t) exceeds threshold or tool breaks
+    (Topic: `dt/fjsp/edge/trigger_reschedule`).
+    """
+    model_config = ConfigDict(use_enum_values=True)
+
+    machine_id: str = Field(..., description="Machine ID triggering the reschedule")
+    reason: str = Field(..., description="Trigger reason (e.g. 'CDI_THRESHOLD_EXCEEDED', 'BREAKDOWN')")
+    cdi: float = Field(..., ge=0.0, description="Current Cumulative Disturbance Index")
+    cdi_threshold: float = Field(0.25, ge=0.0, description="Threshold that was exceeded")
+    current_wear_um: float = Field(..., ge=0.0, description="Flank wear at trigger moment (um)")
+    timestamp: float = Field(..., description="Trigger epoch timestamp or simulation minute")
+    details: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Diagnostic metadata")
+
+
 class CloudSyncPayload(BaseModel):
     """
     Global control and synchronization payload published from Cloud Optimization
-    Layer down to Edge Dispatching Layer (Topic: `fjsp/cloud/sync`).
+    Layer down to Edge Dispatching Layer (Topic: `dt/fjsp/cloud/schedule_sync`).
     """
     weights: Dict[str, float] = Field(
         ...,
@@ -326,6 +355,10 @@ class CloudSyncPayload(BaseModel):
     )
     timestamp: Optional[float] = Field(None, description="Sync epoch or simulation minute")
     iteration: Optional[int] = Field(None, ge=0, description="Cloud optimization round/epoch")
+    baseline_schedule: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="List of operation assignments from Cloud solver"
+    )
 
     @field_validator("weights")
     @classmethod

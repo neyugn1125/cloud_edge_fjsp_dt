@@ -4,6 +4,10 @@ from edge_layer.breadboard_daq import (
     BreadboardDAQInterface,
     RealTimeToolWearEstimator,
 )
+from edge_layer.edge_twin_node import EdgeDigitalTwinNode
+from edge_layer.grbl_controller import GRBLHardwareController
+from edge_layer.mqtt_client import EdgeMQTTClient
+from edge_layer.onnx_exporter import EdgeONNXInferenceEngine
 from edge_layer.ppo_agent import (
     TrainingTelemetryCallback,
     evaluate_agent,
@@ -22,4 +26,8 @@ __all__ = [
     "plot_ppo_training_curves",
     "BreadboardDAQInterface",
     "RealTimeToolWearEstimator",
+    "EdgeMQTTClient",
+    "GRBLHardwareController",
+    "EdgeDigitalTwinNode",
+    "EdgeONNXInferenceEngine",
 ]
