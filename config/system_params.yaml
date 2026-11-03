@@ -1,0 +1,177 @@
+# ==============================================================================
+# Cloud-Edge Collaborative Digital Twin Framework
+# System Physical Parameters & Configuration
+# Strict Unit Conventions:
+#   - Time: Minutes (min)
+#   - Power: Kilowatts (kW)
+#   - Energy: Kilowatt-hours (kWh)
+#   - Tool Wear VB: Micrometers (um)
+# ==============================================================================
+
+# Unit convention verification metadata
+unit_conventions:
+  time: "min"
+  power: "kW"
+  energy: "kWh"
+  tool_wear: "um"
+
+# Plant-wide power limit (Peak load shaving threshold)
+p_limit_kw: 22.0
+
+# Speed-scaling parameters
+# Cutting power scaling follows power-law: P_cut(v) = P_cut_base * (v ^ alpha_p)
+speed_scaling:
+  alpha_p: 1.5
+  levels:
+    1:
+      speed_factor: 1.00
+      description: "Standard cutting speed"
+    2:
+      speed_factor: 1.25
+      description: "Intermediate cutting speed"
+    3:
+      speed_factor: 1.50
+      description: "High cutting speed"
+
+# Time-of-Use (TOU) Electricity Pricing
+# Scaled to the benchmark production shift horizon:
+#   - [0, 25) min   : Off-Peak ($0.06/kWh)
+#   - [25, 60) min  : On-Peak  ($0.20/kWh)
+#   - [60, 100) min : Mid-Peak ($0.12/kWh)
+#   - [100, 1440) min: On-Peak ($0.20/kWh)
+tou_pricing:
+  cycle_min: 1440.0
+  tiers:
+    - name: "off_peak_1"
+      tier_type: "off_peak"
+      start_min: 0.0      # 00:00
+      end_min: 25.0       # 25 min
+      rate_per_kwh: 0.06
+      description: "Early shift off-peak window"
+    - name: "on_peak_1"
+      tier_type: "peak"
+      start_min: 25.0     # 25 min
+      end_min: 60.0       # 60 min
+      rate_per_kwh: 0.20
+      description: "Mid-shift high-demand on-peak window"
+    - name: "mid_peak_1"
+      tier_type: "mid_peak"
+      start_min: 60.0     # 60 min
+      end_min: 100.0      # 100 min
+      rate_per_kwh: 0.12
+      description: "Regular production mid-peak window"
+    - name: "on_peak_2"
+      tier_type: "peak"
+      start_min: 100.0    # 100 min
+      end_min: 1440.0     # 24:00
+      rate_per_kwh: 0.20
+      description: "Extended on-peak window"
+
+# Physical Parameters for CNC Machines M1 to M6
+# Initial tool wear simulates partially worn tools carried over from previous shift:
+#   M1: 55.0 um, M2: 68.0 um, M3: 45.0 um, M4: 72.0 um, M5: 60.0 um, M6: 50.0 um
+# Tool wear rate eta scaled to 0.9 - 1.4 um/min to reflect accelerated tool degradation
+# Power drift due to wear: P_cut_total = P_cut * (1 + gamma * (VB / w_max))
+# Break-Even Time T_BE (min) = (e_on_off_kwh * 60) / (p_idle_kw - p_stdby_kw)
+machines:
+  M1:
+    name: "CNC Milling Machine 1"
+    machine_type: "3-Axis Milling Center"
+    p_idle_kw: 1.20
+    p_stdby_kw: 0.20
+    p_cut_base_kw: 4.50
+    e_on_off_kwh: 0.15
+    t_warmup_min: 3.0
+    tool_wear:
+      initial_wear_um: 55.0 # Carryover wear from previous shift
+      eta: 1.10             # um/min at base speed v=1.0
+      beta: 2.40            # Taylor wear velocity exponent
+      w_max_um: 100.0       # Maximum flank wear limit before replacement
+      gamma: 0.25           # Power drift coefficient due to tool wear
+      t_replace_min: 5.0    # Proactive tool replacement duration
+      t_breakdown_min: 20.0 # Emergency breakdown repair duration
+
+  M2:
+    name: "CNC High-Speed Milling Machine 2"
+    machine_type: "High-Speed Machining Center"
+    p_idle_kw: 1.50
+    p_stdby_kw: 0.25
+    p_cut_base_kw: 6.00
+    e_on_off_kwh: 0.18
+    t_warmup_min: 3.5
+    tool_wear:
+      initial_wear_um: 68.0
+      eta: 1.35
+      beta: 2.60
+      w_max_um: 100.0
+      gamma: 0.28
+      t_replace_min: 5.0
+      t_breakdown_min: 20.0
+
+  M3:
+    name: "CNC Turning Center 3"
+    machine_type: "Precision Lathe Center"
+    p_idle_kw: 0.90
+    p_stdby_kw: 0.16
+    p_cut_base_kw: 3.50
+    e_on_off_kwh: 0.13
+    t_warmup_min: 2.5
+    tool_wear:
+      initial_wear_um: 45.0
+      eta: 0.95
+      beta: 2.30
+      w_max_um: 100.0
+      gamma: 0.22
+      t_replace_min: 5.0
+      t_breakdown_min: 20.0
+
+  M4:
+    name: "CNC Vertical Machining Center 4"
+    machine_type: "Heavy-Duty Milling Center"
+    p_idle_kw: 1.40
+    p_stdby_kw: 0.22
+    p_cut_base_kw: 5.20
+    e_on_off_kwh: 0.19
+    t_warmup_min: 4.0
+    tool_wear:
+      initial_wear_um: 72.0
+      eta: 1.25
+      beta: 2.50
+      w_max_um: 100.0
+      gamma: 0.26
+      t_replace_min: 5.0
+      t_breakdown_min: 20.0
+
+  M5:
+    name: "CNC Drilling & Tapping Center 5"
+    machine_type: "High-Precision Drilling Center"
+    p_idle_kw: 0.85
+    p_stdby_kw: 0.15
+    p_cut_base_kw: 3.20
+    e_on_off_kwh: 0.12
+    t_warmup_min: 2.0
+    tool_wear:
+      initial_wear_um: 60.0
+      eta: 1.00
+      beta: 2.20
+      w_max_um: 100.0
+      gamma: 0.20
+      t_replace_min: 5.0
+      t_breakdown_min: 20.0
+
+  M6:
+    name: "CNC Multi-Tasking Center 6"
+    machine_type: "5-Axis Machining Center"
+    p_idle_kw: 1.30
+    p_stdby_kw: 0.24
+    p_cut_base_kw: 4.80
+    e_on_off_kwh: 0.16
+    t_warmup_min: 3.0
+    tool_wear:
+      initial_wear_um: 50.0
+      eta: 1.15
+      beta: 2.70
+      w_max_um: 100.0
+      gamma: 0.24
+      t_replace_min: 5.0
+      t_breakdown_min: 20.0
