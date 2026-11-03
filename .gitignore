@@ -34,6 +34,9 @@ htmlcov/
 
 # IDE & Editor
 .idea/
+.vscode/*.db*
+.vscode/*.db.lock
+.vscode/ipch/
 *.swp
 *.swo
 *~
