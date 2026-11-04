@@ -340,7 +340,7 @@ If you find this work, codebase, or experimental artifacts useful in your resear
 ```bibtex
 @article{nguyen2026cloudedgefjsp,
   title     = {Cloud-Edge Collaborative Digital Twin for Dynamic Green Flexible Job Shop Scheduling with Speed-Scaling and Tool Wear Resilience},
-  author    = {Nguyen, Thanh and Collaborators},
+  author    = {Nguyen, Minh-Nguyen and Collaborators},
   journal   = {IEEE Transactions on Industrial Informatics},
   year      = {2026},
   volume    = {PP},

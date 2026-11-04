@@ -2,7 +2,8 @@ cff-version: 1.2.0
 message: "If you use this software or experimental artifacts, please cite it as below."
 authors:
   - family-names: "Nguyen"
-    given-names: "Thanh"
+    given-names: "Minh-Nguyen"
+    email: "nguyenminhnguyenpy@gmail.com"
     affiliation: "Advanced Intelligent Manufacturing Laboratory"
 title: "Cloud-Edge Collaborative Digital Twin for Dynamic Green Flexible Job Shop Scheduling with Speed-Scaling and Tool Wear Resilience"
 version: 1.0.0
@@ -24,7 +25,7 @@ preferred-citation:
   type: article
   authors:
     - family-names: "Nguyen"
-      given-names: "Thanh"
+      given-names: "Minh-Nguyen"
   title: "Cloud-Edge Collaborative Digital Twin for Dynamic Green Flexible Job Shop Scheduling with Speed-Scaling and Tool Wear Resilience"
   journal: "IEEE Transactions on Industrial Informatics"
   year: 2026
