@@ -21,6 +21,50 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from utils.mqtt_schemas import SystemConfig, load_system_config
 
+# Standard Brandimarte benchmark scales and configurations
+BENCHMARK_CONFIGS: Dict[str, Dict[str, Any]] = {
+    "Mk01": {
+        "num_jobs": 10,
+        "num_machines": 6,
+        "total_operations": 55,
+        "p_limit_kw": 22.0,
+        "tightness_factor": 1.5,
+        "scale_category": "Small/Medium scale",
+    },
+    "Mk02": {
+        "num_jobs": 10,
+        "num_machines": 6,
+        "total_operations": 58,
+        "p_limit_kw": 24.0,
+        "tightness_factor": 1.5,
+        "scale_category": "High flexibility",
+    },
+    "Mk03": {
+        "num_jobs": 15,
+        "num_machines": 8,
+        "total_operations": 150,
+        "p_limit_kw": 32.0,
+        "tightness_factor": 1.5,
+        "scale_category": "Medium/Large scale",
+    },
+    "Mk04": {
+        "num_jobs": 15,
+        "num_machines": 8,
+        "total_operations": 90,
+        "p_limit_kw": 30.0,
+        "tightness_factor": 1.5,
+        "scale_category": "Complex routing",
+    },
+    "Mk05": {
+        "num_jobs": 15,
+        "num_machines": 4,
+        "total_operations": 106,
+        "p_limit_kw": 16.0,
+        "tightness_factor": 1.5,
+        "scale_category": "High bottleneck/congestion",
+    },
+}
+
 
 def parse_raw_fjs(fjs_path: Union[str, Path]) -> Tuple[int, int, Optional[float], List[List[List[Tuple[int, float]]]]]:
     """
@@ -97,6 +141,7 @@ def parse_and_enrich_fjs(
     tightness_factor: float = 1.5,
     seed: int = 42,
     default_arrival_time: float = 0.0,
+    p_limit_override: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Parse a standard .fjs file and enrich it with physical energy/wear parameters.
@@ -208,19 +253,32 @@ def parse_and_enrich_fjs(
         total_eligible_mach_count / total_ops_count if total_ops_count > 0 else 0.0
     )
 
-    # 4. Serialize Machine Configs with Break-Even Time
+    # 4. Serialize Machine Configs with Break-Even Time (Machines M1 .. M_{num_machines})
     break_even_times = system_config.get_break_even_times()
     machines_dict: Dict[str, Any] = {}
-    for m_id, m_cfg in system_config.machines.items():
+    for m_idx in range(1, num_machines + 1):
+        m_id = f"M{m_idx}"
+        m_cfg = system_config.get_machine(m_id)
         m_dump = m_cfg.model_dump()
         m_dump["break_even_time_min"] = round(break_even_times[m_id], 4)
         machines_dict[m_id] = m_dump
 
-    # 5. Assemble complete Green-FJSP benchmark dataset
+    # Determine peak power limit
     fjs_file_stem = Path(fjs_path).stem
+    if p_limit_override is not None:
+        p_limit_val = float(p_limit_override)
+    elif fjs_file_stem in BENCHMARK_CONFIGS and "p_limit_kw" in BENCHMARK_CONFIGS[fjs_file_stem]:
+        p_limit_val = float(BENCHMARK_CONFIGS[fjs_file_stem]["p_limit_kw"])
+    else:
+        p_limit_val = float(system_config.p_limit_kw)
+
+    scale_cat = BENCHMARK_CONFIGS.get(fjs_file_stem, {}).get("scale_category", "Standard")
+
+    # 5. Assemble complete Green-FJSP benchmark dataset
     enriched_dataset: Dict[str, Any] = {
         "instance_name": f"{fjs_file_stem}_green",
         "source_benchmark": fjs_file_stem,
+        "scale_category": scale_cat,
         "unit_conventions": system_config.unit_conventions,
         "global_parameters": {
             "num_jobs": num_jobs,
@@ -229,7 +287,7 @@ def parse_and_enrich_fjs(
             "avg_machines_per_op": round(avg_mach_per_op, 4),
             "tightness_factor": tightness_factor,
             "random_seed": seed,
-            "p_limit_kw": system_config.p_limit_kw,
+            "p_limit_kw": p_limit_val,
             "speed_scaling": system_config.speed_scaling.model_dump(),
             "tou_pricing": system_config.tou_pricing.model_dump(),
         },
@@ -245,6 +303,50 @@ def parse_and_enrich_fjs(
             json.dump(enriched_dataset, f, indent=2)
 
     return enriched_dataset
+
+
+def generate_all_green_benchmarks(
+    benchmark_dir: Union[str, Path] = "data/benchmarks",
+    yaml_config_path: Union[str, Path] = "config/system_params.yaml",
+    instances: Optional[List[str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Generate and standardize all Brandimarte green benchmarks (Mk01 to Mk05).
+
+    Args:
+        benchmark_dir: Directory containing .fjs files and destination for _green.json.
+        yaml_config_path: Configuration file system_params.yaml.
+        instances: List of benchmark stems to generate (default: Mk01 to Mk05).
+
+    Returns:
+        Dict mapping instance name to parsed dataset dictionary.
+    """
+    if instances is None:
+        instances = ["Mk01", "Mk02", "Mk03", "Mk04", "Mk05"]
+
+    b_dir = Path(benchmark_dir)
+    b_dir.mkdir(parents=True, exist_ok=True)
+    generated: Dict[str, Dict[str, Any]] = {}
+
+    for inst in instances:
+        fjs_file = b_dir / f"{inst}.fjs"
+        json_file = b_dir / f"{inst}_green.json"
+
+        cfg = BENCHMARK_CONFIGS.get(inst, {})
+        tf = cfg.get("tightness_factor", 1.5)
+        p_lim = cfg.get("p_limit_kw", None)
+
+        ds = parse_and_enrich_fjs(
+            fjs_path=fjs_file,
+            yaml_config_path=yaml_config_path,
+            output_json_path=json_file,
+            tightness_factor=tf,
+            p_limit_override=p_lim,
+            seed=42,
+        )
+        generated[inst] = ds
+
+    return generated
 
 
 def print_benchmark_summary(dataset: Dict[str, Any]) -> None:

@@ -79,7 +79,10 @@ class GreenFJSPEnv(gym.Env):
         with open(self.benchmark_path, "r", encoding="utf-8") as f:
             self.benchmark_data: Dict[str, Any] = json.load(f)
 
-        self.p_limit_kw: float = self.system_config.p_limit_kw
+        if "global_parameters" in self.benchmark_data and "p_limit_kw" in self.benchmark_data["global_parameters"]:
+            self.p_limit_kw: float = float(self.benchmark_data["global_parameters"]["p_limit_kw"])
+        else:
+            self.p_limit_kw: float = self.system_config.p_limit_kw
         self.tou_pricing = self.system_config.tou_pricing
 
         # Load Cloud Baseline Guidance if provided
@@ -107,7 +110,10 @@ class GreenFJSPEnv(gym.Env):
         # 2. Problem Dimensions
         self.jobs_data: List[Dict[str, Any]] = self.benchmark_data["jobs"]
         self.num_jobs: int = len(self.jobs_data)
-        self.machine_ids: List[str] = sorted(list(self.system_config.machines.keys()))
+        if "machines" in self.benchmark_data and self.benchmark_data["machines"]:
+            self.machine_ids: List[str] = sorted(list(self.benchmark_data["machines"].keys()))
+        else:
+            self.machine_ids: List[str] = sorted(list(self.system_config.machines.keys()))
         self.num_machines: int = len(self.machine_ids)
         self.num_speed_levels: int = len(self.system_config.speed_scaling.levels)  # 3 (levels 1, 2, 3)
         self.num_pm_options: int = 2  # 0: no PM, 1: opportunistic PM
@@ -259,14 +265,19 @@ class GreenFJSPEnv(gym.Env):
                 wear = twin.current_wear_um
                 w_max = twin.w_max_um
 
-                # PM is strictly permitted ONLY when current wear is in true critical degradation: >= 78% w_max
-                can_pm = (wear >= 0.78 * w_max)
+                alt = next(a_item for a_item in op_info["eligible_machines"] if a_item["machine_id"] == m_id)
+                est_wear_inc = twin.base_eta * float(alt["t_base_min"])
+
+                # PM is strictly permitted when current wear is in degradation: >= 78% w_max (or >= 75% in cloud-guided mode)
+                # OR when the upcoming operation's cutting increment would push tool wear near failure (>= 95% w_max)
+                pm_threshold = 0.75 if self.cloud_guided_mask else 0.78
+                can_pm = (wear >= pm_threshold * w_max) or (wear + 1.35 * est_wear_inc >= 0.95 * w_max)
 
                 # Critical wear protection (active in cloud-guided mode):
-                # If wear >= 92% w_max, high cutting speed s=3 is locked (pm_flag=0)
-                # If wear >= 96% w_max, PM is mandatory (pm_flag=0 is locked)
-                is_critical_wear = (wear >= 0.92 * w_max) and self.cloud_guided_mask
-                is_extreme_wear = (wear >= 0.96 * w_max) and self.cloud_guided_mask
+                # If wear >= 88% w_max, high cutting speed s=3 is locked (pm_flag=0)
+                # If wear >= 92% w_max or the cut would cause breakdown, PM is mandatory (pm_flag=0 is locked)
+                is_critical_wear = (wear >= 0.88 * w_max) and self.cloud_guided_mask
+                is_extreme_wear = ((wear >= 0.92 * w_max) or (wear + 1.25 * est_wear_inc >= 0.98 * w_max)) and self.cloud_guided_mask
 
                 for speed_level in range(1, self.num_speed_levels + 1):
                     # Normal cutting (pm_flag = 0)

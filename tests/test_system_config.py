@@ -41,10 +41,11 @@ def test_system_config_structure(system_config: SystemConfig):
     assert levels[3].speed_factor == 1.50
 
 
-def test_all_six_machines_present_and_in_ranges(system_config: SystemConfig):
-    """Test that M1 to M6 are loaded and strictly follow specified physical parameter ranges."""
-    expected_ids = {"M1", "M2", "M3", "M4", "M5", "M6"}
+def test_all_machines_present_and_in_ranges(system_config: SystemConfig):
+    """Test that all machines (M1 to M8) are loaded and strictly follow specified physical parameter ranges."""
+    expected_ids = {f"M{i}" for i in range(1, len(system_config.machines) + 1)}
     assert set(system_config.machines.keys()) == expected_ids
+    assert len(expected_ids) >= 6
 
     for m_id, m in system_config.machines.items():
         # Power & Warmup checks
@@ -75,7 +76,7 @@ def test_break_even_time_calculation(system_config: SystemConfig):
     Also verify physical consistency: T_BE > t_warmup.
     """
     be_times = system_config.get_break_even_times()
-    assert len(be_times) == 6
+    assert len(be_times) == len(system_config.machines)
 
     for m_id, m in system_config.machines.items():
         expected_t_be = (m.e_on_off_kwh * 60.0) / (m.p_idle_kw - m.p_stdby_kw)

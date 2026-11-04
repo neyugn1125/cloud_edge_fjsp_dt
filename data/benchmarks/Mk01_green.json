@@ -1,6 +1,7 @@
 {
   "instance_name": "Mk01_green",
   "source_benchmark": "Mk01",
+  "scale_category": "Small/Medium scale",
   "unit_conventions": {
     "time": "min",
     "power": "kW",

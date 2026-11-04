@@ -1,0 +1,1718 @@
+{
+  "instance_name": "Mk02_green",
+  "source_benchmark": "Mk02",
+  "scale_category": "High flexibility",
+  "unit_conventions": {
+    "time": "min",
+    "power": "kW",
+    "energy": "kWh",
+    "tool_wear": "um"
+  },
+  "global_parameters": {
+    "num_jobs": 10,
+    "num_machines": 6,
+    "total_operations": 58,
+    "avg_machines_per_op": 4.1034,
+    "tightness_factor": 1.5,
+    "random_seed": 42,
+    "p_limit_kw": 24.0,
+    "speed_scaling": {
+      "alpha_p": 1.5,
+      "levels": {
+        "1": {
+          "speed_factor": 1.0,
+          "description": "Standard cutting speed"
+        },
+        "2": {
+          "speed_factor": 1.25,
+          "description": "Intermediate cutting speed"
+        },
+        "3": {
+          "speed_factor": 1.5,
+          "description": "High cutting speed"
+        }
+      }
+    },
+    "tou_pricing": {
+      "cycle_min": 1440.0,
+      "tiers": [
+        {
+          "name": "off_peak_1",
+          "tier_type": "off_peak",
+          "start_min": 0.0,
+          "end_min": 25.0,
+          "rate_per_kwh": 0.06,
+          "description": "Early shift off-peak window"
+        },
+        {
+          "name": "on_peak_1",
+          "tier_type": "peak",
+          "start_min": 25.0,
+          "end_min": 60.0,
+          "rate_per_kwh": 0.2,
+          "description": "Mid-shift high-demand on-peak window"
+        },
+        {
+          "name": "mid_peak_1",
+          "tier_type": "mid_peak",
+          "start_min": 60.0,
+          "end_min": 100.0,
+          "rate_per_kwh": 0.12,
+          "description": "Regular production mid-peak window"
+        },
+        {
+          "name": "on_peak_2",
+          "tier_type": "peak",
+          "start_min": 100.0,
+          "end_min": 1440.0,
+          "rate_per_kwh": 0.2,
+          "description": "Extended on-peak window"
+        }
+      ]
+    }
+  },
+  "machines": {
+    "M1": {
+      "name": "CNC Milling Machine 1",
+      "machine_type": "3-Axis Milling Center",
+      "p_idle_kw": 1.2,
+      "p_stdby_kw": 0.2,
+      "p_cut_base_kw": 4.5,
+      "e_on_off_kwh": 0.15,
+      "t_warmup_min": 3.0,
+      "tool_wear": {
+        "initial_wear_um": 55.0,
+        "eta": 1.1,
+        "beta": 2.4,
+        "w_max_um": 100.0,
+        "gamma": 0.25,
+        "t_replace_min": 5.0,
+        "t_breakdown_min": 20.0
+      },
+      "break_even_time_min": 9.0
+    },
+    "M2": {
+      "name": "CNC High-Speed Milling Machine 2",
+      "machine_type": "High-Speed Machining Center",
+      "p_idle_kw": 1.5,
+      "p_stdby_kw": 0.25,
+      "p_cut_base_kw": 6.0,
+      "e_on_off_kwh": 0.18,
+      "t_warmup_min": 3.5,
+      "tool_wear": {
+        "initial_wear_um": 68.0,
+        "eta": 1.35,
+        "beta": 2.6,
+        "w_max_um": 100.0,
+        "gamma": 0.28,
+        "t_replace_min": 5.0,
+        "t_breakdown_min": 20.0
+      },
+      "break_even_time_min": 8.64
+    },
+    "M3": {
+      "name": "CNC Turning Center 3",
+      "machine_type": "Precision Lathe Center",
+      "p_idle_kw": 0.9,
+      "p_stdby_kw": 0.16,
+      "p_cut_base_kw": 3.5,
+      "e_on_off_kwh": 0.13,
+      "t_warmup_min": 2.5,
+      "tool_wear": {
+        "initial_wear_um": 45.0,
+        "eta": 0.95,
+        "beta": 2.3,
+        "w_max_um": 100.0,
+        "gamma": 0.22,
+        "t_replace_min": 5.0,
+        "t_breakdown_min": 20.0
+      },
+      "break_even_time_min": 10.5405
+    },
+    "M4": {
+      "name": "CNC Vertical Machining Center 4",
+      "machine_type": "Heavy-Duty Milling Center",
+      "p_idle_kw": 1.4,
+      "p_stdby_kw": 0.22,
+      "p_cut_base_kw": 5.2,
+      "e_on_off_kwh": 0.19,
+      "t_warmup_min": 4.0,
+      "tool_wear": {
+        "initial_wear_um": 72.0,
+        "eta": 1.25,
+        "beta": 2.5,
+        "w_max_um": 100.0,
+        "gamma": 0.26,
+        "t_replace_min": 5.0,
+        "t_breakdown_min": 20.0
+      },
+      "break_even_time_min": 9.661
+    },
+    "M5": {
+      "name": "CNC Drilling & Tapping Center 5",
+      "machine_type": "High-Precision Drilling Center",
+      "p_idle_kw": 0.85,
+      "p_stdby_kw": 0.15,
+      "p_cut_base_kw": 3.2,
+      "e_on_off_kwh": 0.12,
+      "t_warmup_min": 2.0,
+      "tool_wear": {
+        "initial_wear_um": 60.0,
+        "eta": 1.0,
+        "beta": 2.2,
+        "w_max_um": 100.0,
+        "gamma": 0.2,
+        "t_replace_min": 5.0,
+        "t_breakdown_min": 20.0
+      },
+      "break_even_time_min": 10.2857
+    },
+    "M6": {
+      "name": "CNC Multi-Tasking Center 6",
+      "machine_type": "5-Axis Machining Center",
+      "p_idle_kw": 1.3,
+      "p_stdby_kw": 0.24,
+      "p_cut_base_kw": 4.8,
+      "e_on_off_kwh": 0.16,
+      "t_warmup_min": 3.0,
+      "tool_wear": {
+        "initial_wear_um": 50.0,
+        "eta": 1.15,
+        "beta": 2.7,
+        "w_max_um": 100.0,
+        "gamma": 0.24,
+        "t_replace_min": 5.0,
+        "t_breakdown_min": 20.0
+      },
+      "break_even_time_min": 9.0566
+    }
+  },
+  "jobs": [
+    {
+      "job_id": "J1",
+      "job_index": 0,
+      "arrival_time_min": 0.0,
+      "weight": 3,
+      "total_expected_work_min": 25.0,
+      "due_date_min": 37.5,
+      "num_operations": 6,
+      "operations": [
+        {
+          "op_id": "J1_O1",
+          "op_index": 0,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 3.6667,
+          "eligible_machines": [
+            {
+              "machine_id": "M3",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 2.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            }
+          ]
+        },
+        {
+          "op_id": "J1_O2",
+          "op_index": 1,
+          "num_eligible_machines": 2,
+          "mean_processing_time_min": 4.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 4.0
+            }
+          ]
+        },
+        {
+          "op_id": "J1_O3",
+          "op_index": 2,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 4.0,
+          "eligible_machines": [
+            {
+              "machine_id": "M1",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 5.0
+            }
+          ]
+        },
+        {
+          "op_id": "J1_O4",
+          "op_index": 3,
+          "num_eligible_machines": 1,
+          "mean_processing_time_min": 6.0,
+          "eligible_machines": [
+            {
+              "machine_id": "M2",
+              "t_base_min": 6.0
+            }
+          ]
+        },
+        {
+          "op_id": "J1_O5",
+          "op_index": 4,
+          "num_eligible_machines": 2,
+          "mean_processing_time_min": 4.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 6.0
+            }
+          ]
+        },
+        {
+          "op_id": "J1_O6",
+          "op_index": 5,
+          "num_eligible_machines": 3,
+          "mean_processing_time_min": 2.3333,
+          "eligible_machines": [
+            {
+              "machine_id": "M3",
+              "t_base_min": 2.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 4.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "J2",
+      "job_index": 1,
+      "arrival_time_min": 0.0,
+      "weight": 1,
+      "total_expected_work_min": 19.2,
+      "due_date_min": 28.8,
+      "num_operations": 6,
+      "operations": [
+        {
+          "op_id": "J2_O1",
+          "op_index": 0,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.2,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J2_O2",
+          "op_index": 1,
+          "num_eligible_machines": 2,
+          "mean_processing_time_min": 4.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 6.0
+            }
+          ]
+        },
+        {
+          "op_id": "J2_O3",
+          "op_index": 2,
+          "num_eligible_machines": 1,
+          "mean_processing_time_min": 2.0,
+          "eligible_machines": [
+            {
+              "machine_id": "M5",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J2_O4",
+          "op_index": 3,
+          "num_eligible_machines": 2,
+          "mean_processing_time_min": 3.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 3.0
+            }
+          ]
+        },
+        {
+          "op_id": "J2_O5",
+          "op_index": 4,
+          "num_eligible_machines": 3,
+          "mean_processing_time_min": 2.3333,
+          "eligible_machines": [
+            {
+              "machine_id": "M3",
+              "t_base_min": 2.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 4.0
+            }
+          ]
+        },
+        {
+          "op_id": "J2_O6",
+          "op_index": 5,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 3.6667,
+          "eligible_machines": [
+            {
+              "machine_id": "M3",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 2.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "J3",
+      "job_index": 2,
+      "arrival_time_min": 0.0,
+      "weight": 1,
+      "total_expected_work_min": 22.1333,
+      "due_date_min": 33.2,
+      "num_operations": 6,
+      "operations": [
+        {
+          "op_id": "J3_O1",
+          "op_index": 0,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 4.0,
+          "eligible_machines": [
+            {
+              "machine_id": "M1",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 5.0
+            }
+          ]
+        },
+        {
+          "op_id": "J3_O2",
+          "op_index": 1,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 4.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J3_O3",
+          "op_index": 2,
+          "num_eligible_machines": 3,
+          "mean_processing_time_min": 2.3333,
+          "eligible_machines": [
+            {
+              "machine_id": "M3",
+              "t_base_min": 2.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 4.0
+            }
+          ]
+        },
+        {
+          "op_id": "J3_O4",
+          "op_index": 3,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.4,
+          "eligible_machines": [
+            {
+              "machine_id": "M3",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J3_O5",
+          "op_index": 4,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 3.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M4",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            }
+          ]
+        },
+        {
+          "op_id": "J3_O6",
+          "op_index": 5,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 4.4,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "J4",
+      "job_index": 3,
+      "arrival_time_min": 0.0,
+      "weight": 3,
+      "total_expected_work_min": 23.9,
+      "due_date_min": 35.85,
+      "num_operations": 6,
+      "operations": [
+        {
+          "op_id": "J4_O1",
+          "op_index": 0,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.4,
+          "eligible_machines": [
+            {
+              "machine_id": "M3",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J4_O2",
+          "op_index": 1,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.2,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J4_O3",
+          "op_index": 2,
+          "num_eligible_machines": 1,
+          "mean_processing_time_min": 6.0,
+          "eligible_machines": [
+            {
+              "machine_id": "M2",
+              "t_base_min": 6.0
+            }
+          ]
+        },
+        {
+          "op_id": "J4_O4",
+          "op_index": 3,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 4.0,
+          "eligible_machines": [
+            {
+              "machine_id": "M1",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 5.0
+            }
+          ]
+        },
+        {
+          "op_id": "J4_O5",
+          "op_index": 4,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.8,
+          "eligible_machines": [
+            {
+              "machine_id": "M1",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 4.0
+            }
+          ]
+        },
+        {
+          "op_id": "J4_O6",
+          "op_index": 5,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 3.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M4",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "J5",
+      "job_index": 4,
+      "arrival_time_min": 0.0,
+      "weight": 2,
+      "total_expected_work_min": 22.4,
+      "due_date_min": 33.6,
+      "num_operations": 6,
+      "operations": [
+        {
+          "op_id": "J5_O1",
+          "op_index": 0,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 4.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J5_O2",
+          "op_index": 1,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.8,
+          "eligible_machines": [
+            {
+              "machine_id": "M1",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 4.0
+            }
+          ]
+        },
+        {
+          "op_id": "J5_O3",
+          "op_index": 2,
+          "num_eligible_machines": 1,
+          "mean_processing_time_min": 3.0,
+          "eligible_machines": [
+            {
+              "machine_id": "M4",
+              "t_base_min": 3.0
+            }
+          ]
+        },
+        {
+          "op_id": "J5_O4",
+          "op_index": 3,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 4.4,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            }
+          ]
+        },
+        {
+          "op_id": "J5_O5",
+          "op_index": 4,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.2,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J5_O6",
+          "op_index": 5,
+          "num_eligible_machines": 2,
+          "mean_processing_time_min": 3.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 3.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "J6",
+      "job_index": 5,
+      "arrival_time_min": 0.0,
+      "weight": 1,
+      "total_expected_work_min": 26.0,
+      "due_date_min": 39.0,
+      "num_operations": 6,
+      "operations": [
+        {
+          "op_id": "J6_O1",
+          "op_index": 0,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 4.4,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            }
+          ]
+        },
+        {
+          "op_id": "J6_O2",
+          "op_index": 1,
+          "num_eligible_machines": 2,
+          "mean_processing_time_min": 4.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 4.0
+            }
+          ]
+        },
+        {
+          "op_id": "J6_O3",
+          "op_index": 2,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.4,
+          "eligible_machines": [
+            {
+              "machine_id": "M3",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J6_O4",
+          "op_index": 3,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 4.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J6_O5",
+          "op_index": 4,
+          "num_eligible_machines": 1,
+          "mean_processing_time_min": 6.0,
+          "eligible_machines": [
+            {
+              "machine_id": "M2",
+              "t_base_min": 6.0
+            }
+          ]
+        },
+        {
+          "op_id": "J6_O6",
+          "op_index": 5,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.2,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 2.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "J7",
+      "job_index": 6,
+      "arrival_time_min": 0.0,
+      "weight": 1,
+      "total_expected_work_min": 18.0667,
+      "due_date_min": 27.1,
+      "num_operations": 5,
+      "operations": [
+        {
+          "op_id": "J7_O1",
+          "op_index": 0,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 3.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M4",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            }
+          ]
+        },
+        {
+          "op_id": "J7_O2",
+          "op_index": 1,
+          "num_eligible_machines": 1,
+          "mean_processing_time_min": 2.0,
+          "eligible_machines": [
+            {
+              "machine_id": "M5",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J7_O3",
+          "op_index": 2,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 4.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J7_O4",
+          "op_index": 3,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 3.6667,
+          "eligible_machines": [
+            {
+              "machine_id": "M3",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 2.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            }
+          ]
+        },
+        {
+          "op_id": "J7_O5",
+          "op_index": 4,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 4.4,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "J8",
+      "job_index": 7,
+      "arrival_time_min": 0.0,
+      "weight": 1,
+      "total_expected_work_min": 22.8,
+      "due_date_min": 34.2,
+      "num_operations": 6,
+      "operations": [
+        {
+          "op_id": "J8_O1",
+          "op_index": 0,
+          "num_eligible_machines": 2,
+          "mean_processing_time_min": 3.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 3.0
+            }
+          ]
+        },
+        {
+          "op_id": "J8_O2",
+          "op_index": 1,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.4,
+          "eligible_machines": [
+            {
+              "machine_id": "M3",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J8_O3",
+          "op_index": 2,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 4.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J8_O4",
+          "op_index": 3,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 4.4,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            }
+          ]
+        },
+        {
+          "op_id": "J8_O5",
+          "op_index": 4,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.8,
+          "eligible_machines": [
+            {
+              "machine_id": "M1",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 4.0
+            }
+          ]
+        },
+        {
+          "op_id": "J8_O6",
+          "op_index": 5,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.2,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 2.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "J9",
+      "job_index": 8,
+      "arrival_time_min": 0.0,
+      "weight": 3,
+      "total_expected_work_min": 21.0,
+      "due_date_min": 31.5,
+      "num_operations": 5,
+      "operations": [
+        {
+          "op_id": "J9_O1",
+          "op_index": 0,
+          "num_eligible_machines": 1,
+          "mean_processing_time_min": 6.0,
+          "eligible_machines": [
+            {
+              "machine_id": "M2",
+              "t_base_min": 6.0
+            }
+          ]
+        },
+        {
+          "op_id": "J9_O2",
+          "op_index": 1,
+          "num_eligible_machines": 2,
+          "mean_processing_time_min": 4.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 4.0
+            }
+          ]
+        },
+        {
+          "op_id": "J9_O3",
+          "op_index": 2,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.2,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J9_O4",
+          "op_index": 3,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.8,
+          "eligible_machines": [
+            {
+              "machine_id": "M1",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 4.0
+            }
+          ]
+        },
+        {
+          "op_id": "J9_O5",
+          "op_index": 4,
+          "num_eligible_machines": 2,
+          "mean_processing_time_min": 3.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 3.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "J10",
+      "job_index": 9,
+      "arrival_time_min": 0.0,
+      "weight": 1,
+      "total_expected_work_min": 23.1,
+      "due_date_min": 34.65,
+      "num_operations": 6,
+      "operations": [
+        {
+          "op_id": "J10_O1",
+          "op_index": 0,
+          "num_eligible_machines": 1,
+          "mean_processing_time_min": 3.0,
+          "eligible_machines": [
+            {
+              "machine_id": "M4",
+              "t_base_min": 3.0
+            }
+          ]
+        },
+        {
+          "op_id": "J10_O2",
+          "op_index": 1,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 4.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 2.0
+            }
+          ]
+        },
+        {
+          "op_id": "J10_O3",
+          "op_index": 2,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 4.4,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 3.0
+            }
+          ]
+        },
+        {
+          "op_id": "J10_O4",
+          "op_index": 3,
+          "num_eligible_machines": 6,
+          "mean_processing_time_min": 3.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M4",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 5.0
+            },
+            {
+              "machine_id": "M3",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            }
+          ]
+        },
+        {
+          "op_id": "J10_O5",
+          "op_index": 4,
+          "num_eligible_machines": 2,
+          "mean_processing_time_min": 4.5,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 6.0
+            }
+          ]
+        },
+        {
+          "op_id": "J10_O6",
+          "op_index": 5,
+          "num_eligible_machines": 5,
+          "mean_processing_time_min": 3.2,
+          "eligible_machines": [
+            {
+              "machine_id": "M6",
+              "t_base_min": 1.0
+            },
+            {
+              "machine_id": "M5",
+              "t_base_min": 6.0
+            },
+            {
+              "machine_id": "M1",
+              "t_base_min": 3.0
+            },
+            {
+              "machine_id": "M2",
+              "t_base_min": 4.0
+            },
+            {
+              "machine_id": "M4",
+              "t_base_min": 2.0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

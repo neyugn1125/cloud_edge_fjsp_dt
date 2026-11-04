@@ -1,0 +1,11 @@
+Instance,Scale,Variant,Description,Makespan Mean (min),Makespan Std (min),Makespan Degradation (%),TOU Cost Mean ($),TOU Cost Std ($),TOU Cost Degradation (%),TWT Mean (min),TWT Std (min),TWT Degradation (%),Breakdowns Mean
+Mk01,"10x6, 55 ops",Full Proposed Cloud-Edge DT,"Full framework with Dual-Sensor Fusion, Speed Scaling, SSR Standby & Cloud Guidance",79.84,2.91,0.0,2.675,0.046,0.0,171.3,20.61,0.0,0.0
+Mk01,"10x6, 55 ops",Variant 1 (w/o Dual-Sensor Wear Feedback),Blind to wear disturbance; nominal wear estimation causes delayed PM and tool breakdowns,84.87,8.0,6.3,2.993,0.023,11.88,348.37,23.65,103.37,1.73
+Mk01,"10x6, 55 ops",Variant 2 (Fixed Speed s=2),Locked at nominal speed s=2; lacks dynamic TOU tariff peak avoidance,76.56,3.01,-4.1,2.757,0.073,3.05,164.75,18.15,-3.82,0.0
+Mk01,"10x6, 55 ops",Variant 3 (Idle-Only / No Standby),Lacks SSR power switching; machine continuously draws IDLE power during waiting intervals,79.84,2.91,0.0,3.088,0.051,15.44,171.3,20.61,0.0,0.0
+Mk01,"10x6, 55 ops",Variant 4 (w/o Cloud Guidance),Pure local edge dispatching without Cloud global macro optimization schedule,113.39,2.37,42.03,3.572,0.096,33.52,656.44,28.26,283.22,1.0
+Mk03,"15x8, 150 ops",Full Proposed Cloud-Edge DT,"Full framework with Dual-Sensor Fusion, Speed Scaling, SSR Standby & Cloud Guidance",392.37,7.46,0.0,18.862,0.106,0.0,2509.71,136.51,0.0,0.0
+Mk03,"15x8, 150 ops",Variant 1 (w/o Dual-Sensor Wear Feedback),Blind to wear disturbance; nominal wear estimation causes delayed PM and tool breakdowns,455.36,17.85,16.06,20.154,0.091,6.85,3888.17,222.48,54.92,11.13
+Mk03,"15x8, 150 ops",Variant 2 (Fixed Speed s=2),Locked at nominal speed s=2; lacks dynamic TOU tariff peak avoidance,383.91,6.28,-2.16,18.492,0.069,-1.96,2494.6,111.29,-0.6,0.0
+Mk03,"15x8, 150 ops",Variant 3 (Idle-Only / No Standby),Lacks SSR power switching; machine continuously draws IDLE power during waiting intervals,392.37,7.46,0.0,24.609,0.236,30.47,2509.71,136.51,0.0,0.0
+Mk03,"15x8, 150 ops",Variant 4 (w/o Cloud Guidance),Pure local edge dispatching without Cloud global macro optimization schedule,496.75,15.8,26.6,20.411,0.368,8.21,2199.65,255.24,-12.35,2.93

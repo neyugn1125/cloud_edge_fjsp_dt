@@ -91,6 +91,10 @@ class GreenFJSPProblem(ElementwiseProblem):
             self.benchmark_data: Dict[str, Any] = json.load(f)
 
         self.sys_cfg: SystemConfig = load_system_config(self.config_path)
+        if "global_parameters" in self.benchmark_data and "p_limit_kw" in self.benchmark_data["global_parameters"]:
+            self.p_limit_kw: float = float(self.benchmark_data["global_parameters"]["p_limit_kw"])
+        else:
+            self.p_limit_kw: float = self.sys_cfg.p_limit_kw
 
         self.jobs: List[Dict[str, Any]] = self.benchmark_data["jobs"]
         self.num_jobs: int = len(self.jobs)
@@ -111,7 +115,10 @@ class GreenFJSPProblem(ElementwiseProblem):
                 idx += 1
 
         # Pre-instantiate physical machine digital twins
-        self.machine_ids: List[str] = sorted(list(self.sys_cfg.machines.keys()))
+        if "machines" in self.benchmark_data and self.benchmark_data["machines"]:
+            self.machine_ids: List[str] = sorted(list(self.benchmark_data["machines"].keys()))
+        else:
+            self.machine_ids: List[str] = sorted(list(self.sys_cfg.machines.keys()))
         self.num_machines: int = len(self.machine_ids)
         self.machines: Dict[str, CNCPhysicalTwin] = {
             m_id: CNCPhysicalTwin(
@@ -176,8 +183,8 @@ class GreenFJSPProblem(ElementwiseProblem):
                 continue
             mid_t = 0.5 * (t1 + t2)
             concurrent_p = sum(p for (s, e, p) in intervals if s <= mid_t < e)
-            if concurrent_p > self.sys_cfg.p_limit_kw:
-                excess_kwh += (concurrent_p - self.sys_cfg.p_limit_kw) * (dt / 60.0)
+            if concurrent_p > self.p_limit_kw:
+                excess_kwh += (concurrent_p - self.p_limit_kw) * (dt / 60.0)
         return excess_kwh
 
     def _evaluate(self, x: np.ndarray, out: Dict[str, Any], *args: Any, **kwargs: Any) -> None:

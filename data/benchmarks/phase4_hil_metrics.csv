@@ -1,4 +1,4 @@
 mode_id,mode_name,total_ops,cloud_reschedule_calls,reduction_in_cloud_calls_pct,total_network_packets,total_solver_latency_s,edge_decision_latency_ms,mean_mqtt_rtt_ms,final_makespan_min,total_energy_kwh,tou_energy_cost_usd,max_cdi,final_cdi,num_pm_replacements,num_breakdowns
-Mode 1,Periodic Cloud Rescheduling (No Edge AI),55,10,0.0,220,250.0,0.0,0.224,67.2,19.799,2.961,2.3451,0.0705,4,0
-Mode 2,Edge-Only Autonomous (No Cloud Re-sync),55,0,100.0,200,0.0,0.0214,0.224,76.5,21.499,3.281,0.373,0.2023,6,0
-Mode 3,Event-Triggered Cloud-Edge DT (Proposed CDI=0.12),55,2,80.0,204,50.0,0.0214,0.224,63.8,18.599,2.781,0.2555,0.0331,3,0
+Mode 1,Periodic Cloud Rescheduling (No Edge AI),55,10,0.0,220,250.0,0.0,0.224,67.2,19.802,2.96,0.0886,0.0044,4,0
+Mode 2,Edge-Only Autonomous (No Cloud Re-sync),55,0,100.0,200,0.0,0.0214,0.224,76.5,21.502,3.28,0.4405,0.4376,6,0
+Mode 3,Event-Triggered Cloud-Edge DT (Proposed CDI=0.12),55,2,80.0,204,50.0,0.0214,0.224,63.81,18.605,2.782,0.2304,0.0047,3,0

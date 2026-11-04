@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use this software or experimental artifacts, please cite it as below."
+authors:
+  - family-names: "Nguyen"
+    given-names: "Thanh"
+    affiliation: "Advanced Intelligent Manufacturing Laboratory"
+title: "Cloud-Edge Collaborative Digital Twin for Dynamic Green Flexible Job Shop Scheduling with Speed-Scaling and Tool Wear Resilience"
+version: 1.0.0
+date-released: 2026-11-05
+license: MIT
+repository-code: "https://github.com/neyugn/cloud_edge_fjsp_dt"
+keywords:
+  - "digital twin"
+  - "flexible job shop scheduling"
+  - "green manufacturing"
+  - "speed-scaling"
+  - "tool wear resilience"
+  - "edge computing"
+  - "reinforcement learning"
+  - "hardware-in-the-loop"
+  - "NSGA-III"
+  - "ONNX Runtime"
+preferred-citation:
+  type: article
+  authors:
+    - family-names: "Nguyen"
+      given-names: "Thanh"
+  title: "Cloud-Edge Collaborative Digital Twin for Dynamic Green Flexible Job Shop Scheduling with Speed-Scaling and Tool Wear Resilience"
+  journal: "IEEE Transactions on Industrial Informatics"
+  year: 2026
+  volume: "PP"
+  issue: "99"
+  start: 1
+  end: 12
+  doi: "10.1109/TII.2026.XXXXXXX"
+

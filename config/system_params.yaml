@@ -175,3 +175,38 @@ machines:
       gamma: 0.24
       t_replace_min: 5.0
       t_breakdown_min: 20.0
+
+  M7:
+    name: "CNC 5-Axis Profiling Machine 7"
+    machine_type: "5-Axis Profiling Center"
+    p_idle_kw: 1.45
+    p_stdby_kw: 0.23
+    p_cut_base_kw: 5.50
+    e_on_off_kwh: 0.17
+    t_warmup_min: 3.2
+    tool_wear:
+      initial_wear_um: 50.0
+      eta: 1.15
+      beta: 2.45
+      w_max_um: 100.0
+      gamma: 0.25
+      t_replace_min: 5.0
+      t_breakdown_min: 20.0
+
+  M8:
+    name: "CNC Horizontal Milling Center 8"
+    machine_type: "Horizontal Machining Center"
+    p_idle_kw: 1.35
+    p_stdby_kw: 0.21
+    p_cut_base_kw: 5.00
+    e_on_off_kwh: 0.16
+    t_warmup_min: 3.0
+    tool_wear:
+      initial_wear_um: 48.0
+      eta: 1.05
+      beta: 2.35
+      w_max_um: 100.0
+      gamma: 0.25
+      t_replace_min: 5.0
+      t_breakdown_min: 20.0
+

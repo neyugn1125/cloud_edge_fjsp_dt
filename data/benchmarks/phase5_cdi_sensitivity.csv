@@ -1,0 +1,10 @@
+CDI_Threshold,Cloud_Calls_Mean,Cloud_Calls_Std,Makespan_Mean (min),Makespan_Std (min),TOU_Cost_Mean ($),TOU_Cost_Std ($),Energy_Mean (kWh),Energy_Std (kWh),Max_CDI_Mean,Max_CDI_Std,Weighted_Cost,Comm_Overhead (s),Zone
+0.02,41.8,1.66,63.79,0.05,2.781,0.002,18.6,0.014,0.2321,0.0028,1.1194,1045.0,Over-Triggering Region
+0.05,9.2,2.09,63.79,0.05,2.781,0.002,18.6,0.014,0.2321,0.0028,1.1194,230.0,Over-Triggering Region
+0.08,2.0,0.0,63.81,0.03,2.782,0.003,18.605,0.01,0.2304,0.0027,1.1198,50.0,Optimal Autonomous Region
+0.1,2.0,0.0,63.81,0.03,2.782,0.003,18.605,0.01,0.2304,0.0027,1.1198,50.0,Optimal Autonomous Region
+0.12,2.0,0.0,63.81,0.03,2.782,0.003,18.605,0.01,0.2304,0.0027,1.1198,50.0,Optimal Autonomous Region
+0.15,2.0,0.0,63.81,0.03,2.782,0.003,18.605,0.01,0.2304,0.0027,1.1198,50.0,Optimal Autonomous Region
+0.18,1.0,0.0,68.32,0.04,2.962,0.004,19.809,0.016,0.2304,0.0027,1.1955,25.0,Uncorrected Drift Region
+0.22,1.0,0.0,68.32,0.04,2.962,0.004,19.809,0.016,0.2304,0.0027,1.1955,25.0,Uncorrected Drift Region
+0.35,0.0,0.0,76.5,0.06,3.28,0.005,21.502,0.019,0.4405,0.0052,1.3313,0.0,Uncorrected Drift Region

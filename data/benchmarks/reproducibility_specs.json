@@ -1,0 +1,207 @@
+{
+  "title": "A Cloud-Edge Collaborative Digital Twin Framework for Energy-Aware Flexible Job Shop Scheduling",
+  "target_journal": "IEEE Transactions on Industrial Informatics / Elsevier Journal of Manufacturing Systems",
+  "evaluation_protocol": {
+    "train_seeds": [
+      42,
+      101,
+      2026
+    ],
+    "val_seeds": [
+      201,
+      202,
+      203,
+      204,
+      205,
+      206,
+      207,
+      208,
+      209,
+      210
+    ],
+    "test_seeds": [
+      301,
+      302,
+      303,
+      304,
+      305,
+      306,
+      307,
+      308,
+      309,
+      310,
+      311,
+      312,
+      313,
+      314,
+      315
+    ],
+    "seed_disjointness_verified": true
+  },
+  "hardware_latencies": {
+    "edge_onnx_latency_mean_ms": 0.0214,
+    "edge_onnx_latency_range_ms": [
+      0.018,
+      0.027
+    ],
+    "cloud_solver_latency_ms": 25000.0,
+    "mqtt_round_trip_ms": 0.224,
+    "speedup_ratio": "~1.17x10^6x"
+  },
+  "cdi_formulation": {
+    "formula": "CDI(t) = alpha * (|C_act(t) - C_base(t)| / C_base_total) + (1 - alpha) * (|E_act(t) - E_base(t)| / E_base_total)",
+    "default_alpha": 0.5,
+    "default_threshold": 0.12,
+    "normalization_basis": "Full shift nominal schedule baseline (c_base_total, e_base_total)",
+    "knee_point_threshold": 0.12
+  },
+  "observation_space": {
+    "name": "Box(low=0.0, high=1.0, shape=(87,), dtype=float32)",
+    "dimension": 87,
+    "components": [
+      {
+        "indices": "0:50",
+        "description": "10 Jobs x 5 features: [progress, rem_work_ratio, ready_time_norm, urgency_slack, priority_weight]"
+      },
+      {
+        "indices": "50:80",
+        "description": "6 Machines x 5 features: [m_ready_norm, tool_wear_ratio, power_drift, is_processing, is_standby]"
+      },
+      {
+        "indices": "80:87",
+        "description": "7 Global features: [time_norm, tou_rate_norm, energy_norm, active_power_ratio, w_cmax, w_energy, w_tardiness]"
+      }
+    ]
+  },
+  "action_space": {
+    "name": "Discrete(360)",
+    "dimension": 360,
+    "decomposition": "10 jobs x 6 machines x 3 speed levels x 2 PM options = 360 actions",
+    "components": {
+      "job_idx": "0..9 (10 jobs)",
+      "machine_idx": "0..5 (6 machines)",
+      "speed_level": "1 (v=1.0 Eco), 2 (v=1.25 Standard), 3 (v=1.50 High-Speed)",
+      "pm_flag": "0 (Normal cutting), 1 (Proactive Opportunistic Tool Replacement)"
+    },
+    "masking_conditions": [
+      "Job must not be finished (current_op < total_ops_for_job)",
+      "Machine must belong to the eligible machine set for current operation",
+      "PM flag = 1 strictly restricted to critical flank wear (wear >= 75% w_max or cut would cause breakdown)",
+      "When wear >= 88% w_max, high speed s=3 is disabled",
+      "When wear >= 92% w_max or cut pushes wear >= 98% w_max, PM is mandatory (pm_flag=0 locked)"
+    ]
+  },
+  "reward_function": {
+    "formula": "r_t = - (w_cmax * norm_delta_cmax + w_cost * norm_delta_cost + w_tard * norm_delta_tard + penalty_bd) + r_cloud + r_speed",
+    "objective_penalties": {
+      "delta_cmax_norm": "delta_cmax / 78.0 min",
+      "delta_cost_norm": "step_cost / $2.72",
+      "delta_tardiness_norm": "delta_tardiness / 345.0 min",
+      "breakdown_penalty": 10.0
+    },
+    "cloud_guidance_bonus": [
+      "+0.15 if chosen machine matches Cloud NSGA-III assignment for this operation",
+      "+0.08 if chosen job matches Cloud planned sequence index"
+    ],
+    "speed_scaling_shaping": [
+      "+0.08 for high speed s in {2, 3} during Off-Peak tariff (rate <= $0.06/kWh) with sharp tool",
+      "+0.12 for eco speed s = 1 during On-Peak tariff (rate >= $0.20/kWh)",
+      "-0.10 for high speed s = 3 during On-Peak tariff"
+    ]
+  },
+  "multi_objective_evaluation": {
+    "pareto_reference_front": "PF* constructed as non-dominated union of all evaluated algorithms across all runs",
+    "hypervolume_ref_point": [
+      1.1,
+      1.1,
+      1.1
+    ],
+    "normalization": "Min-Max scaling to [0, 1] based on global ideal and nadir points",
+    "statistical_test": "Wilcoxon Signed-Rank Test (alpha=0.05, two-tailed)"
+  },
+  "hyperparameters": {
+    "nsga3": {
+      "algorithm": "NSGA-III (Non-dominated Sorting Genetic Algorithm III)",
+      "library": "pymoo (v0.6+)",
+      "population_size": 100,
+      "generations": 100,
+      "crossover": "Simulated Binary Crossover (SBX)",
+      "crossover_probability": 0.9,
+      "crossover_eta": 15.0,
+      "mutation": "Polynomial Mutation (PM)",
+      "mutation_probability": "1.0 / n_var",
+      "mutation_eta": 20.0,
+      "reference_directions": "Das-Dennis Simplex (M=3, n_partitions=12, 91 ref dirs)",
+      "seeding_strategy": "Heuristic Seeded (15% Eco, 10% Balanced, 5% Fast, 70% Uniform Random)"
+    },
+    "moead": {
+      "algorithm": "MOEA/D (Multi-Objective Evolutionary Algorithm based on Decomposition)",
+      "library": "pymoo / Custom Tchebycheff Decomposition",
+      "population_size": 100,
+      "generations": 100,
+      "decomposition_method": "Tchebycheff (pbi penalty=5.0)",
+      "neighborhood_size_T": 20,
+      "crossover": "SBX (prob=0.90, eta=15.0)",
+      "mutation": "Polynomial Mutation (prob=1/n_var, eta=20.0)"
+    },
+    "maskable_ppo": {
+      "algorithm": "MaskablePPO (Action-Masked Proximal Policy Optimization)",
+      "library": "sb3_contrib (v2.0+)",
+      "policy_network": "MlpPolicy with separate actor & critic heads",
+      "actor_architecture": "[256, 128] fully-connected layers (ReLU)",
+      "critic_architecture": "[256, 128] fully-connected layers (ReLU)",
+      "learning_rate": 0.0003,
+      "n_steps": 550,
+      "batch_size": 220,
+      "n_epochs": 10,
+      "gamma": 0.99,
+      "gae_lambda": 0.95,
+      "clip_range": 0.2,
+      "ent_coef": 0.015,
+      "parallel_envs": 4,
+      "total_timesteps": 66000,
+      "training_seeds": [
+        42,
+        101,
+        2026
+      ]
+    }
+  },
+  "benchmarks": {
+    "Mk01": {
+      "jobs": 10,
+      "machines": 6,
+      "total_ops": 55,
+      "scale": "10x6, 55 ops",
+      "p_limit_kw": 25.0
+    },
+    "Mk02": {
+      "jobs": 10,
+      "machines": 6,
+      "total_ops": 58,
+      "scale": "10x6, 58 ops",
+      "p_limit_kw": 25.0
+    },
+    "Mk03": {
+      "jobs": 15,
+      "machines": 8,
+      "total_ops": 150,
+      "scale": "15x8, 150 ops",
+      "p_limit_kw": 35.0
+    },
+    "Mk04": {
+      "jobs": 15,
+      "machines": 8,
+      "total_ops": 90,
+      "scale": "15x8, 90 ops",
+      "p_limit_kw": 30.0
+    },
+    "Mk05": {
+      "jobs": 15,
+      "machines": 4,
+      "total_ops": 106,
+      "scale": "15x4, 106 ops",
+      "p_limit_kw": 20.0
+    }
+  }
+}
