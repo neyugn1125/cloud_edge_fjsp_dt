@@ -189,13 +189,19 @@ def train_single_seed_ppo(
     benchmark_path: Union[str, Path] = "data/benchmarks/Mk01_green.json",
     config_path: Union[str, Path] = "config/system_params.yaml",
     verbose: int = 0,
+    mixed_cloud_guidance: bool = True,
 ) -> Tuple[MaskablePPO, TrainingTelemetryCallback]:
-    """Train a MaskablePPO model on a single seed using parallel DummyVecEnv."""
+    """
+    Train a MaskablePPO model on a single seed using parallel DummyVecEnv.
+    When mixed_cloud_guidance is True, half the environments run with Cloud guidance
+    and half run fully autonomously (cloud_guided_mask=False) to ensure scale-invariant
+    robustness in Standalone Edge PPO mode.
+    """
     env_fns = [
         make_env(
             seed=seed + i * 100,
             domain_rand=True,
-            cloud_guided_mask=cloud_guided_mask,
+            cloud_guided_mask=(i % 2 == 0) if mixed_cloud_guidance else cloud_guided_mask,
             benchmark_path=benchmark_path,
             config_path=config_path,
         )
@@ -243,6 +249,7 @@ def train_multi_seed_ppo(
     save_dir: Union[str, Path] = "edge_layer/models",
     benchmark_path: Union[str, Path] = "data/benchmarks/Mk01_green.json",
     config_path: Union[str, Path] = "config/system_params.yaml",
+    mixed_cloud_guidance: bool = True,
 ) -> Tuple[MaskablePPO, Dict[str, Any]]:
     """
     Train MaskablePPO across multiple seeds, evaluate deterministically,
@@ -279,6 +286,7 @@ def train_multi_seed_ppo(
             cloud_guided_mask=cloud_guided_mask,
             benchmark_path=benchmark_path,
             config_path=config_path,
+            mixed_cloud_guidance=mixed_cloud_guidance,
         )
 
         all_seed_data["returns"].append(cb.episode_returns)
@@ -288,28 +296,45 @@ def train_multi_seed_ppo(
         all_seed_data["breakdowns"].append([float(x) for x in cb.episode_breakdowns])
         all_seed_data["pms"].append([float(x) for x in cb.episode_pms])
 
-        # Evaluate model on clean deterministic benchmark
+        # Evaluate model on clean deterministic benchmark (Cloud Guided)
         eval_stats = evaluate_agent(
             model=model,
             n_eval_episodes=15,
             seed=42,
             domain_rand=False,
-            cloud_guided_mask=cloud_guided_mask,
+            cloud_guided_mask=True,
+            benchmark_path=benchmark_path,
+            config_path=config_path,
+        )
+        # Evaluate model in Autonomous Mode (No Cloud Prior)
+        eval_stats_auto = evaluate_agent(
+            model=model,
+            n_eval_episodes=15,
+            seed=42,
+            domain_rand=False,
+            cloud_guided_mask=False,
             benchmark_path=benchmark_path,
             config_path=config_path,
         )
         print(
-            f"     Eval (Seed {seed}): Makespan={eval_stats['cmax_mean']:.2f}m, "
+            f"     Eval Guided (Seed {seed}): Makespan={eval_stats['cmax_mean']:.2f}m, "
             f"Cost=${eval_stats['cost_mean']:.3f}, TWT={eval_stats['twt_mean']:.2f}m, "
             f"BD={eval_stats['bd_mean']:.2f}, PM={eval_stats['pm_mean']:.2f}"
         )
+        print(
+            f"     Eval Auto   (Seed {seed}): Makespan={eval_stats_auto['cmax_mean']:.2f}m, "
+            f"Cost=${eval_stats_auto['cost_mean']:.3f}, TWT={eval_stats_auto['twt_mean']:.2f}m, "
+            f"BD={eval_stats_auto['bd_mean']:.2f}, PM={eval_stats_auto['pm_mean']:.2f}"
+        )
 
-        # Composite score: weighted normalized sum (lower is better) + heavy breakdown penalty
+        # Composite score balancing guided performance and autonomous performance
         score = (
-            0.4 * (eval_stats["cmax_mean"] / 78.0)
-            + 0.4 * (eval_stats["cost_mean"] / 2.72)
-            + 0.2 * (eval_stats["twt_mean"] / 345.0)
+            0.35 * (eval_stats["cmax_mean"] / 78.0)
+            + 0.35 * (eval_stats["cost_mean"] / 2.72)
+            + 0.10 * (eval_stats["twt_mean"] / 345.0)
             + (5.0 * eval_stats["bd_mean"])
+            + 0.20 * (eval_stats_auto["cmax_mean"] / 100.0)
+            + (3.0 * eval_stats_auto["bd_mean"])
         )
 
         if score < best_score:

@@ -1,6 +1,7 @@
 """
 Test Suite and Full 60-Second Hardware Telemetry Benchmark (Task 3.3).
-Executes the comprehensive 60-second hardware verification scenario (600 JSON telemetry frames at 10Hz):
+Executes the comprehensive 60-second hardware verification scenario (600 JSON telemetry frames at 10Hz)
+using the High-Fidelity Electro-Mechanical Emulator (with Unmodeled Material & Thermal Disturbances):
 1. 0s - 5s   : Machine OFF (P ~ 0W).
 2. 5s - 12s  : Turn-on Inrush -> Steady-state IDLE (15.6W).
 3. 12s - 22s : CUTTING Speed s=1 (slow wear progression 30 um -> 38 um).
@@ -197,7 +198,7 @@ def generate_verification_plot(
     ax1.plot(t, p_filt, color="#0D47A1", linewidth=2.2, label="Filtered Power $P_{\\text{filt}}$ (1D Kalman + Median)", zorder=3)
     ax1.set_ylabel("Power (W)", fontsize=11, fontweight="bold")
     ax1.set_ylim(-5.0, 210.0)
-    ax1.set_title("Breadboard Physical Twin Telemetry & Dual-Sensor Tool Wear Verification (60s Profile)", fontsize=13, fontweight="bold", pad=12)
+    ax1.set_title("High-Fidelity Electro-Mechanical Emulator (with Unmodeled Material & Thermal Disturbances)\nBreadboard Physical Twin Telemetry & Dual-Sensor Tool Wear Verification (60s Profile)", fontsize=12, fontweight="bold", pad=12)
     ax1.grid(True, linestyle="--", alpha=0.5, zorder=1)
     ax1.legend(loc="upper left", framealpha=0.9, fontsize=9.5)
 

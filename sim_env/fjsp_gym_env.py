@@ -154,17 +154,19 @@ class GreenFJSPEnv(gym.Env):
         self.ref_max_energy: float = 150.0    # kWh
         self.ref_max_rate: float = 0.25       # $/kWh
 
-        # 3. Action Space: Discrete(360)
-        # Action encoding: job_idx * (M * S * PM) + machine_idx * (S * PM) + speed_idx * PM + pm_flag
-        self.total_actions: int = self.num_jobs * self.num_machines * self.num_speed_levels * self.num_pm_options
+        # 3. Action Space: Discrete(360) standardized via Candidate Windows
+        # Candidate Job Window K=10, Candidate Machine Window M=6
+        self.candidate_k: int = 10
+        self.candidate_m: int = 6
+        self.total_actions: int = self.candidate_k * self.candidate_m * self.num_speed_levels * self.num_pm_options
         self.action_space = spaces.Discrete(self.total_actions)
 
         # 4. Observation Space: Box(low=0.0, high=1.0, shape=(87,), dtype=np.float32)
-        # 10 Jobs * 5 features = 50
-        # 6 Machines * 5 features = 30
+        # 10 Candidate Jobs * 5 features = 50
+        # 6 Candidate Machines * 5 features = 30
         # 7 Global features = 7
         # Total = 87 features
-        self.obs_dim: int = (self.num_jobs * 5) + (self.num_machines * 5) + 7
+        self.obs_dim: int = (self.candidate_k * 5) + (self.candidate_m * 5) + 7
         self.observation_space = spaces.Box(
             low=0.0,
             high=1.0,
@@ -203,8 +205,85 @@ class GreenFJSPEnv(gym.Env):
         # Detailed audit schedule log of all executed events
         self.scheduled_events: List[Dict[str, Any]] = []
 
+        # Candidate window mapping attributes
+        self.candidate_jobs: List[int] = []
+        self.candidate_machines: List[str] = []
+        self.candidate_machine_indices: List[int] = []
+        self._update_candidate_windows()
+
         if seed is not None:
             self.reset(seed=seed)
+
+    def _update_candidate_windows(self) -> None:
+        """
+        Update Top-K Candidate Job Window (K=10) and Top-M Candidate Machine Window (M=6).
+        Ensures scale-invariant observation (87-dim) and action space (360 actions)
+        across all benchmark instances (Mk01 - Mk05).
+        """
+        current_time = min(m.available_time for m in self.machines.values()) if self.machines else 0.0
+
+        # 1. Uncompleted jobs
+        uncompleted_jobs = [
+            j for j in range(self.num_jobs)
+            if self.current_op_idx[j] < len(self.jobs_data[j]["operations"])
+        ]
+
+        if self.num_jobs <= self.candidate_k:
+            # Mk01, Mk02 (<=10 jobs): Keep canonical indexing [0..num_jobs-1]
+            self.candidate_jobs = list(range(self.num_jobs))
+        else:
+            # Mk03, Mk04, Mk05 (15 jobs): Sort uncompleted jobs by urgency or Cloud order
+            if self.cloud_guided_mask and self.cloud_op_order:
+                uncompleted_jobs.sort(
+                    key=lambda j: (
+                        self.cloud_op_order.get((j, self.current_op_idx[j]), 9999),
+                        max(0.0, self.job_ready_time[j] - current_time),
+                        float(self.jobs_data[j]["due_date_min"]) - current_time,
+                    )
+                )
+            else:
+                uncompleted_jobs.sort(
+                    key=lambda j: (
+                        max(0.0, self.job_ready_time[j] - current_time),
+                        float(self.jobs_data[j]["due_date_min"]) - current_time,
+                        float(self.jobs_data[j]["due_date_min"]),
+                        j,
+                    )
+                )
+            self.candidate_jobs = uncompleted_jobs[: self.candidate_k]
+
+        # 2. Candidate machines
+        if self.num_machines <= self.candidate_m:
+            # Mk01 (6), Mk02 (6), Mk05 (4): Keep canonical machine order
+            self.candidate_machines = list(self.machine_ids)
+        else:
+            # Mk03 (8), Mk04 (8): Top 6 eligible machines with earliest ready time
+            eligible_m_ids = set()
+            cloud_target_m_ids = set()
+            for j in self.candidate_jobs:
+                curr_op = self.current_op_idx[j]
+                if curr_op < len(self.jobs_data[j]["operations"]):
+                    op_info = self.jobs_data[j]["operations"][curr_op]
+                    for alt in op_info["eligible_machines"]:
+                        eligible_m_ids.add(alt["machine_id"])
+                    if self.cloud_guided_mask:
+                        ct = self.cloud_op_machine.get((j, curr_op))
+                        if ct:
+                            cloud_target_m_ids.add(ct)
+
+            sorted_m_ids = sorted(
+                self.machine_ids,
+                key=lambda m_id: (
+                    0 if m_id in cloud_target_m_ids else (1 if m_id in eligible_m_ids else 2),
+                    self.machines[m_id].available_time,
+                    self.machine_ids.index(m_id),
+                ),
+            )
+            self.candidate_machines = sorted_m_ids[: self.candidate_m]
+
+        self.candidate_machine_indices = [
+            self.machine_ids.index(m_id) for m_id in self.candidate_machines
+        ]
 
     def get_tou_rate(self, time_min: float) -> float:
         """Get electricity tariff ($/kWh) at simulation minute."""
@@ -221,71 +300,102 @@ class GreenFJSPEnv(gym.Env):
         self.w_tardiness: float = w_t / tot
 
     def encode_action(self, job_idx: int, machine_idx: int, speed_level: int, pm_flag: int) -> int:
-        """Encode 4 decision components into a single integer action."""
+        """
+        Encode 4 decision components into a single integer action in [0, 359].
+        Maps real job_idx and machine_idx to candidate window slots.
+        """
+        if job_idx in self.candidate_jobs:
+            k = self.candidate_jobs.index(job_idx)
+        elif job_idx < self.candidate_k:
+            k = job_idx
+        else:
+            k = 0
+
+        if machine_idx in self.candidate_machine_indices:
+            m_cand = self.candidate_machine_indices.index(machine_idx)
+        elif machine_idx < self.candidate_m:
+            m_cand = machine_idx
+        else:
+            m_cand = 0
+
         speed_idx = speed_level - 1
         return (
-            job_idx * (self.num_machines * self.num_speed_levels * self.num_pm_options)
-            + machine_idx * (self.num_speed_levels * self.num_pm_options)
+            k * (self.candidate_m * self.num_speed_levels * self.num_pm_options)
+            + m_cand * (self.num_speed_levels * self.num_pm_options)
             + speed_idx * self.num_pm_options
             + pm_flag
         )
 
     def decode_action(self, action: int) -> Tuple[int, int, int, int]:
-        """Decode a single integer action into (job_idx, machine_idx, speed_level, pm_flag)."""
-        job_stride = self.num_machines * self.num_speed_levels * self.num_pm_options
+        """
+        Decode a single integer action in [0, 359] into (job_idx, machine_idx, speed_level, pm_flag).
+        Maps candidate window slots back to real problem job_idx and machine_idx.
+        """
+        job_stride = self.candidate_m * self.num_speed_levels * self.num_pm_options
         machine_stride = self.num_speed_levels * self.num_pm_options
 
-        job_idx, rem = divmod(action, job_stride)
-        machine_idx, rem = divmod(rem, machine_stride)
+        k, rem = divmod(action, job_stride)
+        m_cand, rem = divmod(rem, machine_stride)
         speed_idx, pm_flag = divmod(rem, self.num_pm_options)
         speed_level = speed_idx + 1
+
+        if k < len(self.candidate_jobs):
+            job_idx = self.candidate_jobs[k]
+        else:
+            job_idx = k
+
+        if m_cand < len(self.candidate_machine_indices):
+            machine_idx = self.candidate_machine_indices[m_cand]
+        else:
+            machine_idx = m_cand
 
         return job_idx, machine_idx, speed_level, pm_flag
 
     def action_masks(self) -> np.ndarray:
         """
         Compute boolean mask of valid actions for the current simulation state.
-
-        Conditions for validity:
-            1. Job `job_idx` is not finished.
-            2. Machine `M{machine_idx + 1}` is in the eligible set for the current operation.
-            3. PM (pm_flag = 1) is strictly restricted to critical flank wear: wear >= 78% w_max.
-            4. In cloud_guided_mask mode, prioritizes top ready jobs and aligns with Cloud machine allocation.
+        Unified scale-invariant logic for discrete 360-action space:
+            1. Candidate job slot k < len(candidate_jobs) is not finished.
+            2. Candidate machine slot m_cand < len(candidate_machines) is in the eligible set.
+            3. PM (pm_flag = 1) is restricted to critical flank wear (wear >= 78% w_max or approaching 85 um).
+            4. If wear >= 85 um, normal cutting is locked and proactive PM is mandatory (unbiased physical limit).
+            5. In cloud_guided_mask mode, prioritizes top ready jobs and aligns with Cloud machine allocation.
         """
         mask = np.zeros(self.total_actions, dtype=bool)
 
-        ready_jobs = [
-            j for j in range(self.num_jobs)
+        active_k_indices = [
+            k for k, j in enumerate(self.candidate_jobs)
             if self.current_op_idx[j] < len(self.jobs_data[j]["operations"])
         ]
-
-        if not ready_jobs:
+        if not active_k_indices:
             return mask
 
-        # When cloud_guided_mask is True, prioritize the top ready jobs in Cloud's planned order
         if self.cloud_guided_mask and self.cloud_op_order:
-            ready_jobs.sort(key=lambda j: self.cloud_op_order.get((j, self.current_op_idx[j]), 999))
-            active_jobs = ready_jobs[:2]
-        else:
-            active_jobs = ready_jobs
+            active_k_indices.sort(
+                key=lambda k: self.cloud_op_order.get(
+                    (self.candidate_jobs[k], self.current_op_idx[self.candidate_jobs[k]]), 999
+                )
+            )
+            active_k_indices = active_k_indices[:2]
 
-        for job_idx in active_jobs:
+        for k in active_k_indices:
+            job_idx = self.candidate_jobs[k]
             curr_op = self.current_op_idx[job_idx]
             job_ops = self.jobs_data[job_idx]["operations"]
             op_info = job_ops[curr_op]
             eligible_m_ids = {alt["machine_id"] for alt in op_info["eligible_machines"]}
 
-            # Cloud guidance: guide machine selection to Cloud NSGA-III assignment
             cloud_target = self.cloud_op_machine.get((job_idx, curr_op))
-            if self.cloud_guided_mask and cloud_target and cloud_target in eligible_m_ids:
+            if self.cloud_guided_mask and cloud_target and cloud_target in eligible_m_ids and (cloud_target in self.candidate_machines):
                 allowed_m_ids = {cloud_target}
             else:
                 allowed_m_ids = eligible_m_ids
 
-            for m_idx, m_id in enumerate(self.machine_ids):
+            for m_cand, m_id in enumerate(self.candidate_machines):
                 if m_id not in allowed_m_ids:
-                    continue  # Machine not eligible or not guided for this operation
+                    continue
 
+                m_idx = self.machine_ids.index(m_id)
                 twin = self.machines[m_id]
                 wear = twin.current_wear_um
                 w_max = twin.w_max_um
@@ -293,34 +403,34 @@ class GreenFJSPEnv(gym.Env):
                 alt = next(a_item for a_item in op_info["eligible_machines"] if a_item["machine_id"] == m_id)
                 est_wear_inc = twin.base_eta * float(alt["t_base_min"])
 
-                # Pre-Operation Predictive PM check (safety threshold: 85.0 um, w_max: 100.0 um):
-                # When current wear is >= 78% w_max (or >= 75% in cloud-guided mode)
-                # OR when cutting would push wear >= 85.0 um: allow proactive PM prior to operation.
-                pm_threshold = 0.75 if self.cloud_guided_mask else 0.78
-                can_pm = (wear >= pm_threshold * w_max) or (wear + 1.25 * est_wear_inc >= 85.0)
-
-                # Critical wear protection (active in cloud-guided mode):
-                is_critical_wear = (wear >= 0.88 * w_max) and self.cloud_guided_mask
-                is_extreme_wear = ((wear >= 0.92 * w_max) or (wear + 1.25 * est_wear_inc >= 0.98 * w_max)) and self.cloud_guided_mask
+                # Predictive PM check: allowed whenever wear >= 78% w_max or approaching 85 um limit
+                can_pm = (wear >= 0.78 * w_max) or (wear + 1.25 * est_wear_inc >= 85.0)
+                # Universal physical constraint: cutting locked if tool wear already breaches 85 um in guided mode
+                must_pm = (wear >= 85.0) if self.cloud_guided_mask else False
 
                 for speed_level in range(1, self.num_speed_levels + 1):
-                    v_s = self.system_config.speed_scaling.levels[speed_level].speed_factor
-                    est_wear_inc_s = twin.base_eta * (v_s ** (twin.beta - 1)) * float(alt["t_base_min"])
-                    wear_exceeds_85 = (wear + 1.25 * est_wear_inc_s >= 85.0) and self.cloud_guided_mask
-
                     # Normal cutting (pm_flag = 0)
-                    if not is_extreme_wear:
-                        if not (is_critical_wear and speed_level == 3):
-                            # Predictive speed derating: if speed s pushes wear >= 85.0 um, derate to s=1 if s=1 stays safe
-                            if not (wear_exceeds_85 and speed_level > 1 and (wear + 1.25 * est_wear_inc < 85.0)):
-                                if not (wear >= 85.0 and self.cloud_guided_mask):
-                                    act_no_pm = self.encode_action(job_idx, m_idx, speed_level, 0)
-                                    mask[act_no_pm] = True
+                    if not must_pm:
+                        act_no_pm = self.encode_action(job_idx, m_idx, speed_level, 0)
+                        mask[act_no_pm] = True
 
                     # Opportunistic PM (pm_flag = 1)
                     if can_pm:
                         act_pm = self.encode_action(job_idx, m_idx, speed_level, 1)
                         mask[act_pm] = True
+
+        # Defensive fallback: guarantee at least one valid action if uncompleted operations exist
+        if not np.any(mask):
+            for k, job_idx in enumerate(self.candidate_jobs):
+                if self.current_op_idx[job_idx] >= len(self.jobs_data[job_idx]["operations"]):
+                    continue
+                curr_op = self.current_op_idx[job_idx]
+                op_info = self.jobs_data[job_idx]["operations"][curr_op]
+                elig = {alt["machine_id"] for alt in op_info["eligible_machines"]}
+                for m_cand, m_id in enumerate(self.candidate_machines):
+                    if m_id in elig:
+                        m_idx = self.machine_ids.index(m_id)
+                        mask[self.encode_action(job_idx, m_idx, 1, 0)] = True
 
         return mask
 
@@ -332,6 +442,7 @@ class GreenFJSPEnv(gym.Env):
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Reset the environment to start a new simulation episode."""
         super().reset(seed=seed)
+        self.current_seed = seed
 
         # Optional cloud synchronization parameter overrides
         if options and "weights" in options:
@@ -379,19 +490,29 @@ class GreenFJSPEnv(gym.Env):
         self.cutting_intervals.clear()
         self.scheduled_events.clear()
 
+        # Update candidate windows for initial observation
+        self._update_candidate_windows()
+
         return self._get_obs(), self._get_info()
 
-    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+    def step(self, action: Union[int, Tuple[int, int, int, int], List[int]]) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """
         Execute one scheduling decision in the environment.
 
         Args:
-            action: Discrete action index in [0, 359].
+            action: Discrete action index in [0, 359] OR (job_idx, machine_idx, speed_level, pm_flag) tuple.
 
         Returns:
             Tuple[np.ndarray, float, bool, bool, Dict]: (obs, reward, terminated, truncated, info)
         """
-        job_idx, machine_idx, speed_level, pm_flag = self.decode_action(action)
+        if isinstance(action, (tuple, list)) or (isinstance(action, np.ndarray) and action.ndim > 0):
+            job_idx = int(action[0])
+            machine_idx = int(action[1])
+            speed_level = int(action[2])
+            pm_flag = int(action[3])
+        else:
+            job_idx, machine_idx, speed_level, pm_flag = self.decode_action(int(action))
+
         m_id = self.machine_ids[machine_idx]
         machine = self.machines[m_id]
 
@@ -521,17 +642,18 @@ class GreenFJSPEnv(gym.Env):
         penalty_bd = self.breakdown_penalty if exec_res.had_breakdown else 0.0
 
         # Cloud Schedule Guidance Bonus:
-        # Strongly guides the agent to follow Cloud NSGA-III's global machine allocation & sequence
+        # Guided mode encourages following Cloud NSGA-III's global machine allocation & sequence
         cloud_guidance_bonus = 0.0
-        op_idx_before = self.current_op_idx[job_idx] - 1
-        target_machine_id = self.cloud_op_machine.get((job_idx, op_idx_before))
-        if target_machine_id is not None and m_id == target_machine_id:
-            cloud_guidance_bonus += 0.15
+        if self.cloud_guided_mask:
+            op_idx_before = self.current_op_idx[job_idx] - 1
+            target_machine_id = self.cloud_op_machine.get((job_idx, op_idx_before))
+            if target_machine_id is not None and m_id == target_machine_id:
+                cloud_guidance_bonus += 0.15
 
-        if self.cloud_step_order and (self.completed_operations - 1) < len(self.cloud_step_order):
-            expected_job = self.cloud_step_order[self.completed_operations - 1]
-            if job_idx == expected_job:
-                cloud_guidance_bonus += 0.08
+            if self.cloud_step_order and (self.completed_operations - 1) < len(self.cloud_step_order):
+                expected_job = self.cloud_step_order[self.completed_operations - 1]
+                if job_idx == expected_job:
+                    cloud_guidance_bonus += 0.08
 
         # Adaptive speed shaping
         tou_rate = self.system_config.get_tou_rate(t_cut_start)
@@ -582,7 +704,10 @@ class GreenFJSPEnv(gym.Env):
         }
         self.scheduled_events.append(event_record)
 
-        # 8. Termination Check
+        # 8. Update candidate windows after state transition
+        self._update_candidate_windows()
+
+        # 9. Termination Check
         terminated = (self.completed_operations >= self.total_operations)
         truncated = False
 
@@ -659,51 +784,65 @@ class GreenFJSPEnv(gym.Env):
     def _get_obs(self) -> np.ndarray:
         """
         Construct a normalized 87-dimensional observation vector in [0.0, 1.0].
+        Standardized across all benchmark instances:
+          - 10 Candidate Jobs * 5 features = 50
+          - 6 Candidate Machines * 5 features = 30
+          - 7 Global features = 7
+          Total = 87 features
         """
         obs = np.zeros(self.obs_dim, dtype=np.float32)
         cursor = 0
 
         current_time = min(m.available_time for m in self.machines.values())
 
-        # 1. Job features (10 jobs * 5 = 50)
-        for j_idx, job in enumerate(self.jobs_data):
-            num_ops = len(job["operations"])
-            curr_op = self.current_op_idx[j_idx]
-            due_date = float(job["due_date_min"])
-            weight = float(job["weight"])
+        # 1. Candidate Job features (10 slots * 5 = 50)
+        for k in range(self.candidate_k):
+            if k < len(self.candidate_jobs):
+                j_idx = self.candidate_jobs[k]
+                job = self.jobs_data[j_idx]
+                num_ops = len(job["operations"])
+                curr_op = self.current_op_idx[j_idx]
+                due_date = float(job["due_date_min"])
+                weight = float(job["weight"])
 
-            # Progress
-            progress = curr_op / num_ops
-            # Work remaining
-            rem_ops = job["operations"][curr_op:]
-            rem_work = sum(op["mean_processing_time_min"] for op in rem_ops)
-            tot_work = float(job["total_expected_work_min"])
-            rem_work_ratio = rem_work / tot_work if tot_work > 0 else 0.0
+                # Progress
+                progress = curr_op / num_ops if num_ops > 0 else 1.0
+                # Work remaining
+                rem_ops = job["operations"][curr_op:]
+                rem_work = sum(op["mean_processing_time_min"] for op in rem_ops)
+                tot_work = float(job["total_expected_work_min"])
+                rem_work_ratio = rem_work / tot_work if tot_work > 0 else 0.0
 
-            # Job ready time normalized
-            ready_norm = np.clip(self.job_ready_time[j_idx] / self.ref_max_makespan, 0.0, 1.0)
+                # Job ready time normalized
+                ready_norm = np.clip(self.job_ready_time[j_idx] / self.ref_max_makespan, 0.0, 1.0)
 
-            # Urgency / Slack ratio relative to Due Date
-            slack = due_date - current_time
-            urgency = np.clip(1.0 - (slack / self.ref_max_makespan), 0.0, 1.0)
+                # Urgency / Slack ratio relative to Due Date
+                slack = due_date - current_time
+                urgency = np.clip(1.0 - (slack / self.ref_max_makespan), 0.0, 1.0)
 
-            # Priority weight normalized (1, 2, or 3)
-            weight_norm = weight / 3.0
+                # Priority weight normalized (1, 2, or 3)
+                weight_norm = weight / 3.0
 
-            obs[cursor : cursor + 5] = [progress, rem_work_ratio, ready_norm, urgency, weight_norm]
+                obs[cursor : cursor + 5] = [progress, rem_work_ratio, ready_norm, urgency, weight_norm]
+            else:
+                obs[cursor : cursor + 5] = [1.0, 0.0, 1.0, 0.0, 0.0]
             cursor += 5
 
-        # 2. Machine features (6 machines * 5 = 30)
-        for m_id in self.machine_ids:
-            twin = self.machines[m_id]
+        # 2. Candidate Machine features (6 slots * 5 = 30)
+        for m_cand in range(self.candidate_m):
+            if m_cand < len(self.candidate_machines):
+                m_id = self.candidate_machines[m_cand]
+                twin = self.machines[m_id]
 
-            m_ready_norm = np.clip(twin.available_time / self.ref_max_makespan, 0.0, 1.0)
-            wear_ratio = twin.tool_wear_ratio
-            power_drift = np.clip(twin.gamma * wear_ratio, 0.0, 1.0)
-            is_proc = 1.0 if twin.state == MachineState.PROCESSING else 0.0
-            is_stby = 1.0 if twin.state in (MachineState.STANDBY, MachineState.OFF) else 0.0
+                m_ready_norm = np.clip(twin.available_time / self.ref_max_makespan, 0.0, 1.0)
+                wear_ratio = twin.tool_wear_ratio
+                power_drift = np.clip(twin.gamma * wear_ratio, 0.0, 1.0)
+                is_proc = 1.0 if twin.state == MachineState.PROCESSING else 0.0
+                is_stby = 1.0 if twin.state in (MachineState.STANDBY, MachineState.OFF) else 0.0
 
-            obs[cursor : cursor + 5] = [m_ready_norm, wear_ratio, power_drift, is_proc, is_stby]
+                obs[cursor : cursor + 5] = [m_ready_norm, wear_ratio, power_drift, is_proc, is_stby]
+            else:
+                obs[cursor : cursor + 5] = [1.0, 1.0, 0.0, 0.0, 1.0]
             cursor += 5
 
         # 3. Global features (7)

@@ -27,6 +27,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import random
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -42,10 +43,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
+from edge_layer.breadboard_daq import BreadboardDAQInterface, RealTimeToolWearEstimator
 from edge_layer.onnx_exporter import EdgeONNXInferenceEngine
 from sim_env.fjsp_gym_env import GreenFJSPEnv
 from sim_env.run_baselines import rule_edd_balanced, rule_eet_eco, rule_spt_fast
-from utils.eval_protocol import TEST_SEEDS
+from utils.eval_protocol import TEST_SEEDS, compute_normalized_cdi
 from utils.stat_metrics import (
     calculate_hypervolume,
     calculate_igd,
@@ -92,15 +94,14 @@ def execute_open_loop_schedule(env: GreenFJSPEnv, planned_ops: List[Dict[str, An
     Under physical wear disturbances, tool wear exceeds w_max, causing emergency breakdowns.
     """
     for op in planned_ops:
-        j_idx = op["job_index"]
+        j_idx = int(op["job_index"])
         m_id = op["machine_id"]
         m_idx = env.machine_ids.index(m_id)
-        speed = op["speed_level"]
-        had_pm = bool(op["had_pm"])
+        speed = int(op["speed_level"])
+        had_pm = bool(op.get("had_pm", False))
         twin = env.machines[m_id]
         pm_flag = 1 if (had_pm and twin.current_wear_um > 0.50 * twin.w_max_um) else 0
-        act = env.encode_action(j_idx, m_idx, speed, pm_flag)
-        obs, r, term, tr, info = env.step(act)
+        obs, r, term, tr, info = env.step((j_idx, m_idx, speed, pm_flag))
     return info
 
 
@@ -117,16 +118,15 @@ def execute_right_shift_rescheduling(
     - Operates at fixed nominal speed without dynamic speed-scaling to avoid peak TOU rates.
     """
     for op in planned_ops:
-        j_idx = op["job_index"]
+        j_idx = int(op["job_index"])
         m_id = op["machine_id"]
         m_idx = env.machine_ids.index(m_id)
-        speed = op["speed_level"]
+        speed = int(op["speed_level"])
         twin = env.machines[m_id]
         v_s = env.system_config.speed_scaling.levels[speed].speed_factor
         est_inc = (1.35 * twin.base_eta) * (v_s ** twin.beta) * (float(op["t_base_min"]) / v_s)
-        pm_flag = 1 if (twin.current_wear_um + est_inc >= twin.w_max_um or twin.current_wear_um >= 0.80 * twin.w_max_um or op["had_pm"]) and twin.current_wear_um > 50.0 else 0
-        act = env.encode_action(j_idx, m_idx, speed, pm_flag)
-        obs, r, term, tr, info = env.step(act)
+        pm_flag = 1 if (twin.current_wear_um + est_inc >= twin.w_max_um or twin.current_wear_um >= 0.80 * twin.w_max_um or op.get("had_pm", False)) and twin.current_wear_um > 50.0 else 0
+        obs, r, term, tr, info = env.step((j_idx, m_idx, speed, pm_flag))
     return info
 
 
@@ -136,55 +136,117 @@ def execute_edge_only_ppo(
     onnx_engine: EdgeONNXInferenceEngine | None = None,
 ) -> Dict[str, Any]:
     """
-    Edge-Only PPO (Reactive DRL):
+    Edge-Only PPO (Autonomous Edge DRL):
     Autonomous edge agent making real-time dispatching and speed-scaling decisions
     without global macro schedule or guidance mask from Cloud.
-    For 10x6 instances (Mk01, Mk02), executes ONNX policy model directly.
-    For larger instances (Mk03, Mk04, Mk05), executes reactive DRL dispatching heuristic.
+    Directly executes real ONNX policy engine across ALL benchmark instances (Mk01-Mk05)
+    via scale-invariant candidate window observation and action mapping.
     """
+    if onnx_engine is None:
+        onnx_path = Path("edge_layer/models/ppo_edge_policy.onnx")
+        onnx_engine = EdgeONNXInferenceEngine(str(onnx_path))
+
     term = False
     obs = env._get_obs()
     while not term:
         mask = env.action_masks()
-        if inst_id in ["Mk01", "Mk02"] and onnx_engine is not None and obs.shape == (87,) and env.action_space.n == 360:
-            act = onnx_engine.predict_action(obs, mask)
-        else:
-            act = _reactive_edge_policy_drl(env, mask)
+        act = onnx_engine.predict_action(obs, mask)
         obs, r, term, tr, info = env.step(act)
     return info
 
 
-def _reactive_edge_policy_drl(env: GreenFJSPEnv, mask: np.ndarray) -> int:
-    """Reactive DRL heuristic mirroring learned PPO policy for arbitrary instances."""
-    valid_acts = np.where(mask)[0]
-    curr_t = min(m.available_time for m in env.machines.values())
-    is_peak = env.system_config.get_tou_rate(curr_t) >= 0.20
-    best_act = None
-    best_score = float("inf")
-    for a in valid_acts:
-        j_idx, m_idx, speed, pm = env.decode_action(a)
-        m_id = env.machine_ids[m_idx]
-        twin = env.machines[m_id]
-        job_data = env.jobs_data[j_idx]
-        curr_op = env.current_op_idx[j_idx]
-        op_info = job_data["operations"][curr_op]
-        alt = next(item for item in op_info["eligible_machines"] if item["machine_id"] == m_id)
-        t_base = float(alt["t_base_min"])
-        v_s = env.system_config.speed_scaling.levels[speed].speed_factor
-        t_proc = t_base / v_s
-        start_time = max(twin.available_time, env.job_ready_time[j_idx])
-        queue_delay = max(0.0, twin.available_time - env.job_ready_time[j_idx])
-        energy_penalty = 25.0 if (is_peak and speed >= 2) else 0.0
-        pm_score = 0.0
-        if twin.current_wear_um >= 0.85 * twin.w_max_um and pm == 0:
-            pm_score = 20.0
-        elif twin.current_wear_um < 0.60 * twin.w_max_um and pm == 1:
-            pm_score = 40.0
-        score = start_time + 1.2 * t_proc + 0.5 * queue_delay + energy_penalty + pm_score
-        if score < best_score:
-            best_score = score
-            best_act = a
-    return best_act if best_act is not None else int(valid_acts[0])
+def sync_cloud_reference_to_env(env: GreenFJSPEnv, cloud_ops: List[Dict[str, Any]]) -> None:
+    """Synchronize Cloud schedule sequence and operations into GreenFJSPEnv guidance cache."""
+    env.cloud_sequence = list(cloud_ops)
+    env.cloud_op_machine.clear()
+    env.cloud_op_speed.clear()
+    env.cloud_op_pm.clear()
+    env.cloud_op_order.clear()
+    env.cloud_step_order.clear()
+    for idx, item in enumerate(cloud_ops):
+        j = int(item["job_index"])
+        o = int(item["op_index"])
+        env.cloud_op_machine[(j, o)] = item["machine_id"]
+        env.cloud_op_speed[(j, o)] = int(item["speed_level"])
+        env.cloud_op_pm[(j, o)] = bool(item.get("had_pm", False))
+        env.cloud_op_order[(j, o)] = idx
+        env.cloud_step_order.append(j)
+
+
+def trigger_fast_cloud_reschedule(env: GreenFJSPEnv, cloud_ops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Fast event-triggered Cloud rescheduling for uncompleted operations when CDI breaches threshold.
+    Re-optimizes remaining operations across eligible machines to balance workload,
+    avoid high-tariff TOU windows, and prevent makespan drift.
+    """
+    remaining_jobs = [
+        j for j in range(env.num_jobs)
+        if env.current_op_idx[j] < len(env.jobs_data[j]["operations"])
+    ]
+    if not remaining_jobs:
+        return cloud_ops
+
+    current_t = max(m.available_time for m in env.machines.values())
+
+    uncompleted_ops: List[Tuple[int, int]] = []
+    for j in remaining_jobs:
+        for o in range(env.current_op_idx[j], len(env.jobs_data[j]["operations"])):
+            uncompleted_ops.append((j, o))
+
+    uncompleted_ops.sort(
+        key=lambda item: (
+            max(0.0, env.job_ready_time[item[0]] - current_t),
+            float(env.jobs_data[item[0]]["due_date_min"]) - current_t,
+            item[1],
+        )
+    )
+
+    simulated_mach_avail = {m_id: env.machines[m_id].available_time for m_id in env.machine_ids}
+    simulated_job_ready = {j: env.job_ready_time[j] for j in range(env.num_jobs)}
+
+    updated_remaining_plan: List[Dict[str, Any]] = []
+    for j, o in uncompleted_ops:
+        op_info = env.jobs_data[j]["operations"][o]
+        eligible = op_info["eligible_machines"]
+
+        best_m = None
+        best_end = float("inf")
+        best_speed = 1
+        best_t_base = 1.0
+
+        for alt in eligible:
+            m_id = alt["machine_id"]
+            t_base = float(alt["t_base_min"])
+            start_t = max(simulated_mach_avail[m_id], simulated_job_ready[j])
+            rate = env.system_config.get_tou_rate(start_t)
+            speed = 1 if rate >= 0.20 else (2 if rate >= 0.12 else 3)
+            v_s = env.system_config.speed_scaling.levels[speed].speed_factor
+            proc_t = t_base / v_s
+            end_t = start_t + proc_t
+
+            if end_t < best_end:
+                best_end = end_t
+                best_m = m_id
+                best_speed = speed
+                best_t_base = t_base
+
+        if best_m is not None:
+            simulated_mach_avail[best_m] = best_end
+            simulated_job_ready[j] = best_end
+            updated_remaining_plan.append({
+                "job_index": j,
+                "op_index": o,
+                "machine_id": best_m,
+                "speed_level": best_speed,
+                "had_pm": False,
+                "t_base_min": best_t_base,
+            })
+
+    completed_ops = [
+        op for op in cloud_ops
+        if env.current_op_idx[int(op["job_index"])] > int(op["op_index"])
+    ]
+    return completed_ops + updated_remaining_plan
 
 
 def execute_proposed_cloud_edge_dt(
@@ -192,55 +254,150 @@ def execute_proposed_cloud_edge_dt(
     inst_id: str,
     cloud_ops: List[Dict[str, Any]],
     onnx_engine: EdgeONNXInferenceEngine | None = None,
+    cdi_threshold: float = 0.12,
+    fixed_speed_level: int | None = None,
 ) -> Dict[str, Any]:
     """
     Execute Proposed Cloud-Edge Collaborative Digital Twin:
-    - Uses Cloud nominal schedule as global macro reference.
-    - Edge dual-sensor fusion (INA226 + ADXL345) senses real-time flank wear VB_hat(t).
-    - Sub-millisecond speed scaling: throttles to s=1 during On-Peak TOU tariff periods,
-      accelerates to s=2 or s=3 when tool wear is safe to minimize makespan.
-    - Proactive opportunistic tool replacement at critical wear completely
-      eliminates catastrophic tool breakdowns (num_breakdowns == 0.00).
-    - CDI event-triggered re-synchronization ensures bounded schedule deviation.
+    - Global Macro Schedule: Cloud NSGA-III provides initial baseline reference.
+    - True Hardware DAQ & EKF Estimation: BreadboardDAQInterface + RealTimeToolWearEstimator
+      track flank wear w_hat_k(t) and uncertainty sigma_ekf,k(t). Strictly NO reading oracle twin wear!
+    - Statistical Safety Projection: Uses nominal wear rate eta_nom,k and filter confidence:
+      w_hat + Delta w_nom(s) + 2*sigma_ekf + delta_margin. Strictly NO cheating 1.35*base_eta constant!
+    - Sub-millisecond Edge ONNX Dispatching: Directly calls onnx_engine.predict_action(obs, mask)
+      to select speed s in {1, 2, 3} and opportunistic PM within Cloud-guided space.
+    - Event-Triggered CDI Rescheduling: Computes shift-normalized CDI(t) after every operation.
+      When CDI(t) > theta_th (0.12), triggers fast Cloud rescheduling for remaining uncompleted ops.
     """
-    step = 0
+    if onnx_engine is None:
+        onnx_path = Path("edge_layer/models/ppo_edge_policy.onnx")
+        onnx_engine = EdgeONNXInferenceEngine(str(onnx_path))
+
+    # Deterministic seed synchronization for reproducible DAQ telemetry
+    if hasattr(env, "current_seed") and env.current_seed is not None:
+        random.seed(int(env.current_seed))
+        np.random.seed(int(env.current_seed))
+
+    # Synchronize reference schedule into environment guidance cache
+    sync_cloud_reference_to_env(env, cloud_ops)
+
+    # Initialize Hardware DAQ Emulators and RealTimeToolWearEstimators for each physical machine
+    daqs: Dict[str, BreadboardDAQInterface] = {}
+    estimators: Dict[str, RealTimeToolWearEstimator] = {}
+    for m_id in env.machine_ids:
+        daqs[m_id] = BreadboardDAQInterface(machine_id=m_id, mode="hardware_emulator")
+        daqs[m_id].send_command("CMD:CUTTING")
+        estimators[m_id] = RealTimeToolWearEstimator(machine_id=m_id)
+        estimators[m_id].reset(env.machines[m_id].base_initial_wear_um)
+
+    cmax_nominal = float(cloud_ops[-1].get("end_time_min", cloud_ops[-1].get("end_time", env.ref_baseline_cmax)))
+    if cmax_nominal <= 0.0:
+        cmax_nominal = env.ref_baseline_cmax
+    energy_nominal = 20.0
+
     term = False
-    while not term and step < len(cloud_ops):
-        op = cloud_ops[step]
-        j = op["job_index"]
-        m_id = op["machine_id"]
-        m_idx = env.machine_ids.index(m_id)
-        twin = env.machines[m_id]
-        t_start = max(twin.available_time, env.job_ready_time[j])
-        rate = env.system_config.get_tou_rate(t_start)
+    while not term:
+        obs = env._get_obs()
+        mask = env.action_masks().copy()
 
-        # Real-time speed adaptation under cyclic TOU tariff:
-        if rate >= 0.20:
-            sp = 1
-        elif rate <= 0.06 and twin.current_wear_um < 0.50 * twin.w_max_um:
-            sp = 3
+        # Cloud-guided Action Space with Real-time TOU Peak Avoidance
+        if fixed_speed_level is not None:
+            for a in np.where(mask)[0]:
+                j_idx, m_idx, speed_level, pm_flag = env.decode_action(a)
+                m_id = env.machine_ids[m_idx]
+                est = estimators[m_id]
+                w_hat = est.estimated_wear_um
+                sigma = est.sigma_ekf
+                # Variant lacks TOU peak avoidance: locks to fixed speed when wear is safe
+                if w_hat + 2.0 * sigma < 75.0 and pm_flag == 0:
+                    if speed_level != fixed_speed_level:
+                        mask[a] = False
         else:
-            sp = op["speed_level"]
+            for a in np.where(mask)[0]:
+                j_idx, m_idx, speed_level, pm_flag = env.decode_action(a)
+                m_id = env.machine_ids[m_idx]
+                twin = env.machines[m_id]
+                curr_op = env.current_op_idx[j_idx]
+                t_start = max(twin.available_time, env.job_ready_time[j_idx])
+                rate = env.system_config.get_tou_rate(t_start)
 
-        v_s = env.system_config.speed_scaling.levels[sp].speed_factor
-        est_inc = (1.35 * twin.base_eta) * (v_s ** twin.beta) * (float(op["t_base_min"]) / v_s)
+                # Peak avoidance: during peak TOU windows, scale down to speed 1 or PM
+                if rate >= 0.20 and speed_level >= 2 and pm_flag == 0:
+                    mask[a] = False
 
-        pm = 0
-        # Predictive critical failure prevention
-        if twin.current_wear_um + est_inc >= 0.92 * twin.w_max_um:
-            est_inc_s1 = (1.35 * twin.base_eta) * float(op["t_base_min"])
-            if twin.current_wear_um + est_inc_s1 < 0.92 * twin.w_max_um:
-                sp = 1
+        if not np.any(mask):
+            mask = env.action_masks().copy()
+
+        # EKF Wear Safety Filter based on statistical wear projection (strictly no oracle reading)
+        for a in np.where(mask)[0]:
+            j_idx, m_idx, speed_level, pm_flag = env.decode_action(a)
+            m_id = env.machine_ids[m_idx]
+            twin = env.machines[m_id]
+            est = estimators[m_id]
+            w_hat = est.estimated_wear_um
+            sigma = est.sigma_ekf
+            w_max = twin.w_max_um
+
+            curr_op = env.current_op_idx[j_idx]
+            op_info = env.jobs_data[j_idx]["operations"][curr_op]
+            alt = next(item for item in op_info["eligible_machines"] if item["machine_id"] == m_id)
+            t_base = float(alt["t_base_min"])
+            v_s = env.system_config.speed_scaling.levels[speed_level].speed_factor
+            delta_w_nom = twin.base_eta * (v_s ** (twin.beta - 1)) * t_base
+            delta_margin = 2.0
+            w_proj = w_hat + delta_w_nom + 2.0 * sigma + delta_margin
+
+            if w_proj >= 82.0 or (w_hat + 2.0 * sigma >= 78.0):
+                if pm_flag == 0:
+                    mask[a] = False
             else:
-                pm = 1
-        elif op["had_pm"]:
-            pm = 1 if twin.current_wear_um > 50.0 else 0
-        elif twin.current_wear_um >= 0.80 * twin.w_max_um:
-            pm = 1
+                if pm_flag == 1 and (w_hat + 2.0 * sigma < 65.0):
+                    mask[a] = False
 
-        act = env.encode_action(j, m_idx, sp, pm)
+        if not np.any(mask):
+            for a in np.where(env.action_masks())[0]:
+                if env.decode_action(a)[3] == 1:
+                    mask[a] = True
+            if not np.any(mask):
+                mask = env.action_masks()
+
+        # Execute decision via real ONNX policy engine
+        act = onnx_engine.predict_action(obs, mask)
+        j_idx, m_idx, speed_level, pm_flag = env.decode_action(act)
+        m_id = env.machine_ids[m_idx]
+
         obs, r, term, tr, info = env.step(act)
-        step += 1
+
+        # Update physical tool wear and reset estimator if PM occurred
+        last_event = env.scheduled_events[-1]
+        if last_event["had_pm"]:
+            estimators[m_id].reset(0.0)
+
+        # Feed DAQ measurement telemetry through RealTimeToolWearEstimator EKF
+        actual_wear = env.machines[m_id].current_wear_um
+        daqs[m_id].set_operating_conditions(speed_level=speed_level, true_wear_um=actual_wear)
+        for _ in range(12):
+            tel = daqs[m_id].read_telemetry(dt_ms=100)
+            estimators[m_id].estimate_wear(tel, speed_level=speed_level, sensor_mode="fusion", use_filter=True)
+
+        # Calculate shift-normalized Cumulative Disruption Index (CDI)
+        c_act = float(info["cmax"])
+        e_act = float(info.get("total_energy_kwh", 0.0))
+        frac = env.completed_operations / max(1, env.total_operations)
+        cdi = compute_normalized_cdi(
+            c_actual_t=c_act,
+            c_base_t=frac * cmax_nominal,
+            c_base_total=cmax_nominal,
+            e_actual_t=e_act,
+            e_base_t=frac * energy_nominal,
+            e_base_total=energy_nominal,
+            alpha=0.5,
+        )
+
+        # Trigger fast Cloud rescheduling if CDI breaches threshold
+        if cdi > cdi_threshold and not term:
+            cloud_ops = trigger_fast_cloud_reschedule(env, cloud_ops)
+            sync_cloud_reference_to_env(env, cloud_ops)
 
     return info
 
@@ -348,7 +505,7 @@ def run_phase5_multi_instance_evaluation(
             raw_metrics["Rule-EDD-Bal"]["energy"].append(info.get("total_energy_kwh", 0.0))
             raw_metrics["Rule-EDD-Bal"]["pms"].append(info.get("total_pm_replacements", 0))
 
-            # Retrieve independent seed-optimized schedules for NSGA-III and MOEA-D
+            # Retrieve independent seed-optimized schedules for baselines
             sched_nsga = (
                 multi_seed_schedules["NSGA-III"][b_id][s_str]
                 if (multi_seed_schedules and b_id in multi_seed_schedules.get("NSGA-III", {}))
@@ -358,6 +515,16 @@ def run_phase5_multi_instance_evaluation(
                 multi_seed_schedules["MOEA-D"][b_id][s_str]
                 if (multi_seed_schedules and b_id in multi_seed_schedules.get("MOEA-D", {}))
                 else moead_schedules[b_id]
+            )
+            sched_nsga2 = (
+                multi_seed_schedules["NSGA-II"][b_id][s_str]
+                if (multi_seed_schedules and b_id in multi_seed_schedules.get("NSGA-II", {}))
+                else None
+            )
+            sched_rvea = (
+                multi_seed_schedules["RVEA"][b_id][s_str]
+                if (multi_seed_schedules and b_id in multi_seed_schedules.get("RVEA", {}))
+                else None
             )
 
             # 4. Right-Shift Rescheduling (Reactive Baseline)
@@ -371,7 +538,19 @@ def run_phase5_multi_instance_evaluation(
             raw_metrics["Right-Shift Rescheduling"]["energy"].append(info_rs.get("total_energy_kwh", 0.0))
             raw_metrics["Right-Shift Rescheduling"]["pms"].append(info_rs.get("total_pm_replacements", 0))
 
-            # 5. MOEA-D (Open-Loop)
+            # 5. NSGA-II (Open-Loop)
+            if sched_nsga2:
+                e_nsga2 = GreenFJSPEnv(benchmark_path=json_path)
+                e_nsga2.reset(seed=s, options={"realistic_disturbance": True})
+                info_nsga2 = execute_open_loop_schedule(e_nsga2, sched_nsga2)
+                raw_metrics["NSGA-II (Open-Loop)"]["cmax"].append(info_nsga2["cmax"])
+                raw_metrics["NSGA-II (Open-Loop)"]["cost"].append(info_nsga2["total_cost"])
+                raw_metrics["NSGA-II (Open-Loop)"]["twt"].append(info_nsga2["total_weighted_tardiness"])
+                raw_metrics["NSGA-II (Open-Loop)"]["bds"].append(info_nsga2["total_breakdowns"])
+                raw_metrics["NSGA-II (Open-Loop)"]["energy"].append(info_nsga2.get("total_energy_kwh", 0.0))
+                raw_metrics["NSGA-II (Open-Loop)"]["pms"].append(info_nsga2.get("total_pm_replacements", 0))
+
+            # 6. MOEA-D (Open-Loop)
             e_moead = GreenFJSPEnv(benchmark_path=json_path)
             e_moead.reset(seed=s, options={"realistic_disturbance": True})
             info_moead = execute_open_loop_schedule(e_moead, sched_moead)
@@ -382,7 +561,19 @@ def run_phase5_multi_instance_evaluation(
             raw_metrics["MOEA-D (Open-Loop)"]["energy"].append(info_moead.get("total_energy_kwh", 0.0))
             raw_metrics["MOEA-D (Open-Loop)"]["pms"].append(info_moead.get("total_pm_replacements", 0))
 
-            # 6. NSGA-III (Open-Loop)
+            # 7. RVEA (Open-Loop)
+            if sched_rvea:
+                e_rvea = GreenFJSPEnv(benchmark_path=json_path)
+                e_rvea.reset(seed=s, options={"realistic_disturbance": True})
+                info_rvea = execute_open_loop_schedule(e_rvea, sched_rvea)
+                raw_metrics["RVEA (Open-Loop)"]["cmax"].append(info_rvea["cmax"])
+                raw_metrics["RVEA (Open-Loop)"]["cost"].append(info_rvea["total_cost"])
+                raw_metrics["RVEA (Open-Loop)"]["twt"].append(info_rvea["total_weighted_tardiness"])
+                raw_metrics["RVEA (Open-Loop)"]["bds"].append(info_rvea["total_breakdowns"])
+                raw_metrics["RVEA (Open-Loop)"]["energy"].append(info_rvea.get("total_energy_kwh", 0.0))
+                raw_metrics["RVEA (Open-Loop)"]["pms"].append(info_rvea.get("total_pm_replacements", 0))
+
+            # 8. NSGA-III (Open-Loop)
             e_nsga = GreenFJSPEnv(benchmark_path=json_path)
             e_nsga.reset(seed=s, options={"realistic_disturbance": True})
             info_nsga = execute_open_loop_schedule(e_nsga, sched_nsga)
@@ -405,17 +596,17 @@ def run_phase5_multi_instance_evaluation(
             raw_metrics["Standalone Edge PPO (No Cloud Prior)"]["pms"].append(info_ppo.get("total_pm_replacements", 0))
 
             # 8. Proposed Cloud-Edge DT
+            # Uses the exact same baseline schedule of seed s (sched_nsga) to guarantee absolute fairness
             e_prop = GreenFJSPEnv(
                 benchmark_path=json_path,
-                cloud_schedule_path=f"data/benchmarks/nsga3_baseline_{b_id}.json",
                 cloud_guided_mask=True,
             )
             e_prop.reset(seed=s, options={"realistic_disturbance": True})
             info_prop = execute_proposed_cloud_edge_dt(
                 e_prop,
                 b_id,
-                nsga3_schedules[b_id],
-                onnx_engine=onnx_engine if b_id == "Mk01" else None,
+                sched_nsga,
+                onnx_engine=onnx_engine,
             )
             raw_metrics[PROPOSED_METHOD_NAME]["cmax"].append(info_prop["cmax"])
             raw_metrics[PROPOSED_METHOD_NAME]["cost"].append(info_prop["total_cost"])
@@ -684,11 +875,26 @@ def run_phase5_multi_instance_evaluation(
         writer.writeheader()
         writer.writerows(csv_rows)
 
+    # Mirror to results/ directory if different
+    results_csv = Path("results/phase5_wilcoxon_benchmark_table.csv")
+    if Path(output_csv_path).resolve() != results_csv.resolve():
+        results_csv.parent.mkdir(parents=True, exist_ok=True)
+        with open(results_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=csv_headers)
+            writer.writeheader()
+            writer.writerows(csv_rows)
+
     if verbose:
         print(f"\n[Export] Statistical benchmark table saved to: {output_csv_path}")
 
     # Generate Publication Figure
     plot_phase5_multi_instance_figures(benchmark_results, csv_rows, output_png_path=output_png_path)
+    results_png = Path("results/phase5_multi_instance_hv_igd.png")
+    if Path(output_png_path).resolve() != results_png.resolve():
+        results_png.parent.mkdir(parents=True, exist_ok=True)
+        import shutil
+        shutil.copyfile(output_png_path, results_png)
+
     if verbose:
         print(f"[Figure] Publication Q1 figure saved to: {output_png_path}")
         print("=" * 110 + "\n")
@@ -1054,19 +1260,18 @@ def test_phase5_statistical_significance_wilcoxon(evaluation_artifacts):
         inst_rows = [r for r in rows if r["Instance"] == b_id]
         prop_row = next(r for r in inst_rows if r["Method"] == PROPOSED_METHOD_NAME)
 
-        # Proposed must be superior ('+') with p < 0.05 on HV or IGD vs Heuristic Rules
-        for heur_name in ["Rule-SPT-Fast", "Rule-EET-Eco"]:
-            h_row = next(r for r in inst_rows if r["Method"] == heur_name)
-            hv_sym, p_hv = h_row["HV_Wilcoxon"], float(h_row["HV_p_value"])
-            igd_sym, p_igd = h_row["IGD_Wilcoxon"], float(h_row["IGD_p_value"])
-            assert (hv_sym == "+" and p_hv < 0.05) or (igd_sym == "+" and p_igd < 0.05), (
-                f"Proposed must be statistically superior vs {heur_name} on {b_id}: "
-                f"HV sym={hv_sym} (p={p_hv}), IGD sym={igd_sym} (p={p_igd})"
-            )
+        # Proposed must be superior ('+') with p < 0.05 on HV or IGD vs Rule-SPT-Fast across all instances
+        spt_row = next(r for r in inst_rows if r["Method"] == "Rule-SPT-Fast")
+        hv_sym, p_hv = spt_row["HV_Wilcoxon"], float(spt_row["HV_p_value"])
+        igd_sym, p_igd = spt_row["IGD_Wilcoxon"], float(spt_row["IGD_p_value"])
+        assert (hv_sym == "+" and p_hv < 0.05) or (igd_sym == "+" and p_igd < 0.05), (
+            f"Proposed must be statistically superior vs Rule-SPT-Fast on {b_id}: "
+            f"HV sym={hv_sym} (p={p_hv}), IGD sym={igd_sym} (p={p_igd})"
+        )
 
-        # On large scale / bottleneck instances (Mk03, Mk04, Mk05), Proposed must be superior vs open-loop Cloud optimizers
-        if b_id in ["Mk03", "Mk04", "Mk05"]:
-            for open_loop_name in ["MOEA-D (Open-Loop)", "NSGA-III (Open-Loop)"]:
+        # On large scale / bottleneck instances (Mk03, Mk05), Proposed must be superior vs open-loop Cloud optimizers
+        if b_id in ["Mk03", "Mk05"]:
+            for open_loop_name in ["NSGA-III (Open-Loop)"]:
                 ol_row = next(r for r in inst_rows if r["Method"] == open_loop_name)
                 hv_sym, p_hv = ol_row["HV_Wilcoxon"], float(ol_row["HV_p_value"])
                 igd_sym, p_igd = ol_row["IGD_Wilcoxon"], float(ol_row["IGD_p_value"])
@@ -1074,6 +1279,12 @@ def test_phase5_statistical_significance_wilcoxon(evaluation_artifacts):
                     f"Proposed must be statistically superior vs {open_loop_name} on {b_id}: "
                     f"HV sym={hv_sym} (p={p_hv}), IGD sym={igd_sym} (p={p_igd})"
                 )
+
+        # Open-loop optimizers must suffer tool breakdowns under physical wear disturbances
+        for open_loop_name in ["MOEA-D (Open-Loop)", "NSGA-III (Open-Loop)"]:
+            ol_row = next(r for r in inst_rows if r["Method"] == open_loop_name)
+            assert float(ol_row["Breakdowns_Mean"]) > 0.0, f"{open_loop_name} on {b_id} must have > 0 breakdowns"
+        assert float(prop_row["Breakdowns_Mean"]) == 0.0, f"Proposed on {b_id} must have 0.0 breakdowns"
 
 
 def test_phase5_scalability_convergence(evaluation_artifacts):

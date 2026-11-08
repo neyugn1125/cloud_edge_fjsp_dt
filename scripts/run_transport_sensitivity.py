@@ -101,13 +101,12 @@ def run_transport_sensitivity():
                     elif m == "Proposed Cloud-Edge DT":
                         e = GreenFJSPEnv(
                             benchmark_path=json_path,
-                            cloud_schedule_path=f"data/benchmarks/nsga3_baseline_{b_id}.json",
                             cloud_guided_mask=True,
                             transport_time_min=tau,
                         )
                         e.reset(seed=s, options={"realistic_disturbance": True})
                         inf = execute_proposed_cloud_edge_dt(
-                            e, b_id, nsga_base, onnx_engine=onnx_engine if b_id == "Mk01" else None
+                            e, b_id, sched_nsga, onnx_engine=onnx_engine
                         )
 
                     cmaxes.append(inf["cmax"])

@@ -184,6 +184,7 @@ def test_telemetry_schema_and_commands():
 def test_estimator_update_diagnostics():
     """
     Verify detailed diagnostics dictionary returned by estimator.update().
+    Checks that both estimated wear and EKF standard deviation (sigma_ekf) are returned.
     """
     estimator = RealTimeToolWearEstimator()
     sample_tel = {
@@ -200,8 +201,19 @@ def test_estimator_update_diagnostics():
     assert "power_wear_est" in diag
     assert "vib_wear_est" in diag
     assert "estimation_variance" in diag
+    assert "estimation_std_um" in diag
+    assert diag["estimation_std_um"] > 0.0
+    assert math.isclose(diag["estimation_std_um"], math.sqrt(diag["estimation_variance"]), rel_tol=1e-2)
+    assert hasattr(estimator, "sigma_ekf")
+    assert estimator.sigma_ekf > 0.0
     assert diag["sensor_mode"] == "fusion"
     assert 0.0 <= diag["estimated_wear_um"] <= 100.0
+
+    # Test return_std option in estimate_wear on fresh reset
+    estimator.reset(0.0)
+    wear_val, wear_std = estimator.estimate_wear(sample_tel, speed_level=1, sensor_mode="fusion", return_std=True)
+    assert round(wear_val, 2) == diag["estimated_wear_um"]
+    assert math.isclose(wear_std, diag["estimation_std_um"], rel_tol=1e-2)
 
 
 def test_real_serial_mode_error_handling():

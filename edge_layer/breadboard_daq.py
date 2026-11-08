@@ -2,7 +2,8 @@
 Breadboard DAQ Interface and Real-Time Tool Wear Estimator.
 Implements:
 1. BreadboardDAQInterface: Supports 'real_serial' (UART /dev/ttyUSB0) and 'hardware_emulator'
-   (10Hz JSON telemetry matching firmware_esp32/main.cpp with inrush spikes and wear-induced drift).
+   (High-Fidelity Electro-Mechanical Emulator with Unmodeled Material & Thermal Disturbances,
+   inrush current spike matching firmware_esp32/main.cpp, and realistic flank wear degradation).
 2. RealTimeToolWearEstimator: Dual-sensor fusion (INA226 Power + ADXL345 Vibration)
    using Extended Kalman Filtering (EKF) and optimal weighted regression.
 """
@@ -14,7 +15,7 @@ import math
 import os
 import random
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import yaml
@@ -134,6 +135,21 @@ class BreadboardDAQInterface:
         self.kappa = 0.48
         self.alpha_vib_wear = 1.35
 
+        # Unmodeled electro-mechanical dynamics and physical calibration mismatch:
+        # In a real physical CNC machine, the true mechanical response slightly deviates
+        # from the nominal model constants known to the estimator:
+        self.p_cut_base_real = self.p_cut_base_w * 1.003   # Calibration mismatch: +0.3%
+        self.gamma_real = self.gamma * 0.988              # Real wear power slope: -1.2%
+        self.vib_base_real = self.vib_base_g * 1.004      # Real base vibration: +0.4%
+        self.kappa_real = self.kappa * 0.985              # Real wear vibration slope: -1.5%
+
+        # Dynamic disturbance states
+        self.delta_mat = 0.0          # Workpiece hardness fluctuation AR(1) state
+        self.ar_phi = 0.70             # Autoregressive memory coefficient (correlation time ~300ms)
+        self.ar_amp_max = 0.04         # Max hardness fluctuation amplitude (+/- 4%)
+        self.chip_load_fraction = 0.28 # Fraction of cutting power attributable to chip shear
+        self.accumulated_cut_time_s = 0.0  # Spindle thermal run-time accumulator
+
         # Hardware emulator internal state
         self.ssr_state = "IDLE"
         self.current_speed = 1
@@ -182,6 +198,13 @@ class BreadboardDAQInterface:
                 old_state = self.ssr_state
                 self.ssr_state = target_state
 
+                # Reset dynamic disturbance state when not cutting
+                if target_state in {"OFF", "STANDBY", "IDLE"}:
+                    self.delta_mat = 0.0
+                if target_state == "STANDBY":
+                    # Tool swap / preventive maintenance allows spindle cooling
+                    self.accumulated_cut_time_s = max(0.0, self.accumulated_cut_time_s - 15.0)
+
                 # Check for inrush transition: from OFF/STANDBY to IDLE/CUTTING
                 if old_state in {"OFF", "STANDBY"} and target_state in {"IDLE", "CUTTING"}:
                     self.inrush_remaining_ms = 200.0  # 200 ms inrush duration
@@ -198,6 +221,10 @@ class BreadboardDAQInterface:
         Reads one telemetry packet (at 10Hz = 100ms interval).
         In emulator mode, runs the 200Hz internal DSP subsampling loop (20 samples per 100ms)
         matching the exact behavior of firmware_esp32/main.cpp.
+        Incorporates unmodeled physical disturbances:
+        - Workpiece hardness fluctuation AR(1) process (+/- 4%).
+        - Sensor calibration mismatch and slow thermal drift (+0.6%).
+        - Intermittent non-linear chatter bursts when tool flank wear VB > 65 um.
         Returns JSON dictionary matching ESP32 firmware schema:
         {"ts_ms": int, "v_bus": float, "i_amp": float, "p_raw_w": float,
          "p_filt_w": float, "vib_rms_g": float, "ssr_state": str}
@@ -273,12 +300,22 @@ class BreadboardDAQInterface:
             }
 
         # CUTTING State
-        speed_factor = self.speed_factors.get(self.current_speed, 1.0)
-        p_base = self.p_cut_base_w * (speed_factor ** self.alpha_p)
+        self.accumulated_cut_time_s += dt_ms / 1000.0
 
-        # Flank wear increases cutting power by gamma * (VB / w_max)
+        # 1. Unmodeled Workpiece Hardness Fluctuation: AR(1) process (+/- 4% max amplitude)
+        self.delta_mat = self.ar_phi * self.delta_mat + random.gauss(0.0, self.ar_amp_max * 0.25)
+        self.delta_mat = float(np.clip(self.delta_mat, -self.ar_amp_max, self.ar_amp_max))
+
+        # 2. Unmodeled Thermal Drift (+0.0% -> +0.6% gradual drift over prolonged cutting)
+        thermal_drift = min(0.006, self.accumulated_cut_time_s * 0.00012)
+
+        speed_factor = self.speed_factors.get(self.current_speed, 1.0)
+        p_base = self.p_cut_base_real * (speed_factor ** self.alpha_p)
+
+        # Flank wear increases cutting power by gamma_real * (VB / w_max),
+        # combined with unmodeled workpiece hardness and thermal drift on the mechanical load:
         wear_ratio = self.true_wear_um / self.w_max_um
-        p_cut_steady = p_base * (1.0 + self.gamma * wear_ratio)
+        p_cut_steady = p_base * (1.0 + thermal_drift + self.chip_load_fraction * self.delta_mat + self.gamma_real * wear_ratio)
 
         if inrush_active:
             p_cut_steady *= 2.2  # Inrush spike 2.2x
@@ -293,9 +330,14 @@ class BreadboardDAQInterface:
 
         p_filt = self._filter.get_estimate()
 
-        # Vibration model: increases non-linearly with wear ratio and cutting speed
-        vib_base = self.vib_base_g * (speed_factor ** self.alpha_v)
-        vib_steady = vib_base * (1.0 + self.kappa * (wear_ratio ** self.alpha_vib_wear))
+        # 3. Vibration model: base vibration + material hardness + wear degradation
+        # Plus unmodeled intermittent chatter bursts when tool wear VB > 65 um:
+        vib_base = self.vib_base_real * (speed_factor ** self.alpha_v)
+        chatter_burst = 0.0
+        if self.true_wear_um > 65.0 and random.random() < 0.10:
+            chatter_burst = random.uniform(0.04, 0.12) * ((self.true_wear_um - 65.0) / 35.0)
+
+        vib_steady = vib_base * (1.0 + self.chip_load_fraction * 0.8 * self.delta_mat + self.kappa_real * (wear_ratio ** self.alpha_vib_wear)) + chatter_burst
         vib_rms = max(0.01, vib_steady + random.gauss(0.0, 0.025))
 
         return {
@@ -351,14 +393,29 @@ class RealTimeToolWearEstimator:
         self.kappa = 0.48
         self.alpha_vib_wear = 1.35
 
-        # Sensor measurement noise characteristics
-        self.sigma_p_filt = 0.25  # Watts
+        # Sensor measurement noise characteristics (accounting for effective observation uncertainty)
+        self.sigma_p_filt = 0.40  # Watts (effective measurement standard deviation under unmodeled load variations)
         self.sigma_vib_rms = 0.025  # g
 
         # EKF State variables
         self.x_est = 0.0  # Estimated wear (um)
         self.P_est = 4.0  # Estimation covariance
         self.q_proc = 0.06  # Process noise variance (optimal tracking damping)
+
+    @property
+    def estimated_wear_um(self) -> float:
+        """Returns the current EKF estimated flank wear in micrometers."""
+        return float(self.x_est)
+
+    @property
+    def sigma_ekf(self) -> float:
+        """Returns standard deviation of estimation error sqrt(P_est) in micrometers."""
+        return float(math.sqrt(max(1e-6, self.P_est)))
+
+    def get_confidence_bounds(self, k_sigma: float = 2.0) -> Tuple[float, float]:
+        """Returns [lower, upper] confidence bounds in micrometers (default 95% = 2*sigma)."""
+        std = self.sigma_ekf
+        return max(0.0, self.x_est - k_sigma * std), min(105.0, self.x_est + k_sigma * std)
 
     def _load_config(self, path: str) -> dict:
         if os.path.exists(path):
@@ -415,7 +472,8 @@ class RealTimeToolWearEstimator:
         speed_level: int,
         sensor_mode: str = "fusion",
         use_filter: bool = True,
-    ) -> float:
+        return_std: bool = False,
+    ) -> Union[float, Tuple[float, float]]:
         """
         Estimates tool wear (um) from a telemetry packet.
         Parameters:
@@ -423,6 +481,7 @@ class RealTimeToolWearEstimator:
             speed_level: Cutting speed level (1, 2, or 3).
             sensor_mode: 'fusion' (both), 'power_only' (INA226), or 'vib_only' (ADXL345).
             use_filter: True to use EKF tracking, False for instantaneous inversion.
+            return_std: True to return (estimated_wear_um, sigma_ekf) tuple.
         """
         ssr_state = telemetry.get("ssr_state", "CUTTING")
         p_filt = float(telemetry.get("p_filt_w", 0.0))
@@ -431,9 +490,9 @@ class RealTimeToolWearEstimator:
         p_base, _ = self._get_base_values(speed_level)
         # If machine is not actively cutting or inrush transient spike is active, hold current estimate
         if ssr_state != "CUTTING":
-            return self.x_est
+            return (self.x_est, self.sigma_ekf) if return_std else self.x_est
         if p_filt > 1.5 * p_base * (1.0 + self.gamma):
-            return self.x_est
+            return (self.x_est, self.sigma_ekf) if return_std else self.x_est
 
         w_p, var_p = self.invert_power_wear(p_filt, speed_level)
         w_v, var_v = self.invert_vib_wear(vib_rms, speed_level)
@@ -452,7 +511,8 @@ class RealTimeToolWearEstimator:
             r_meas = 1.0 / (inv_p + inv_v)
 
         if not use_filter:
-            return float(np.clip(z_meas, 0.0, 100.0))
+            inst_est = float(np.clip(z_meas, 0.0, 100.0))
+            return (inst_est, math.sqrt(r_meas)) if return_std else inst_est
 
         # EKF Time Update (Prediction: random-walk progression)
         x_pred = self.x_est
@@ -464,7 +524,7 @@ class RealTimeToolWearEstimator:
         self.P_est = (1.0 - kalman_gain) * P_pred
         self.x_est = float(np.clip(self.x_est, 0.0, 100.0))
 
-        return self.x_est
+        return (self.x_est, self.sigma_ekf) if return_std else self.x_est
 
     def update(
         self,
@@ -490,5 +550,6 @@ class RealTimeToolWearEstimator:
             "power_var": round(var_p, 3),
             "vib_var": round(var_v, 3),
             "estimation_variance": round(self.P_est, 4),
+            "estimation_std_um": round(self.sigma_ekf, 3),
             "sensor_mode": sensor_mode,
         }
