@@ -208,14 +208,14 @@ class TOUTierConfig(BaseModel):
 
 
 class TOUPricingConfig(BaseModel):
-    """24-Hour (1440 min) repeating Time-of-Use tariff structure."""
-    cycle_min: float = Field(1440.0, gt=0.0, description="Tariff repeat cycle in minutes")
+    """Cyclic repeating Time-of-Use tariff structure (default 100-min cycle)."""
+    cycle_min: float = Field(100.0, gt=0.0, description="Tariff repeat cycle in minutes")
     tiers: List[TOUTierConfig] = Field(..., description="Ordered list of pricing intervals")
 
     def get_rate_at_minute(self, minute: float) -> float:
         """
         Lookup the electricity tariff ($/kWh) for any simulation time in minutes.
-        Automatically wraps time within the 24h cycle (modulo 1440 min).
+        Automatically wraps time within the repeating cycle (modulo cycle_min).
         """
         normalized_min = minute % self.cycle_min
         for tier in self.tiers:

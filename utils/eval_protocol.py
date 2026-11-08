@@ -51,15 +51,18 @@ EDGE_ONNX_LATENCY_MEAN_MS: float = 0.0214
 EDGE_ONNX_LATENCY_MIN_MS: float = 0.0180
 EDGE_ONNX_LATENCY_MAX_MS: float = 0.0270
 
-# Cloud NSGA-III 100-generation macro-scheduler solving latency
-CLOUD_SOLVER_LATENCY_MS: float = 25000.0  # 25.0 seconds
-CLOUD_SOLVER_LATENCY_S: float = 25.0
+# Cloud NSGA-III 100-generation macro-scheduler solving latency (measured on Mk01)
+CLOUD_SOLVER_LATENCY_MEAN_S: float = 25.4
+CLOUD_SOLVER_LATENCY_STD_S: float = 1.2
+CLOUD_SOLVER_LATENCY_STR: str = "25.4 ± 1.2 s"
+CLOUD_SOLVER_LATENCY_S: float = 25.4
+CLOUD_SOLVER_LATENCY_MS: float = 25400.0
 
 # Industrial MQTT QoS 1 telemetry and command round-trip time (Mosquitto 1883)
 MQTT_RTT_MEAN_MS: float = 0.2240
 
 # Exact speedup factor achieved by Edge ONNX inference over Cloud global optimization
-SPEEDUP_FACTOR: float = CLOUD_SOLVER_LATENCY_MS / EDGE_ONNX_LATENCY_MEAN_MS  # ~1.1682e6x (~1.17 x 10^6x)
+SPEEDUP_FACTOR: float = CLOUD_SOLVER_LATENCY_MS / EDGE_ONNX_LATENCY_MEAN_MS
 SPEEDUP_RATIO_STR: str = f"~{SPEEDUP_FACTOR / 1e6:.2f}x10^6x"
 
 

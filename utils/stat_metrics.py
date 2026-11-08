@@ -195,3 +195,111 @@ def run_wilcoxon_test(
 
     return p_val, symbol
 
+
+def compute_cliffs_delta(
+    proposed_scores: Union[List[float], np.ndarray],
+    baseline_scores: Union[List[float], np.ndarray],
+) -> float:
+    """
+    Compute Cliff's Delta non-parametric effect size statistic (Cliff, 1993; Romano et al., 2006).
+
+    Formula:
+        delta = sum(sgn(x_i - y_j)) / (n_x * n_y)
+
+    Range:
+        delta in [-1.0, +1.0]
+        - delta > 0: Proposed values tend to be larger than Baseline.
+        - delta < 0: Proposed values tend to be smaller than Baseline.
+        - |delta| < 0.147: Negligible effect
+        - 0.147 <= |delta| < 0.33: Small effect
+        - 0.33 <= |delta| < 0.474: Medium effect
+        - |delta| >= 0.474: Large effect
+
+    Args:
+        proposed_scores: Array-like samples for Proposed algorithm (length n_x).
+        baseline_scores: Array-like samples for Baseline algorithm (length n_y).
+
+    Returns:
+        float: Cliff's delta effect size in [-1.0, 1.0].
+    """
+    x = np.asarray(proposed_scores, dtype=np.float64)
+    y = np.asarray(baseline_scores, dtype=np.float64)
+    nx = len(x)
+    ny = len(y)
+    if nx == 0 or ny == 0:
+        return 0.0
+
+    # Pairwise comparison matrix (nx, ny)
+    diff = x[:, None] - y[None, :]
+    pos = int(np.sum(diff > 0))
+    neg = int(np.sum(diff < 0))
+    return float((pos - neg) / (nx * ny))
+
+
+def compute_vargha_delaney_a12(
+    proposed_scores: Union[List[float], np.ndarray],
+    baseline_scores: Union[List[float], np.ndarray],
+) -> float:
+    """
+    Compute Vargha-Delaney A12 non-parametric effect size measure (Vargha & Delaney, 2000).
+
+    A12 measures the probability that a randomly chosen observation from the Proposed
+    distribution is greater than a randomly chosen observation from the Baseline distribution.
+
+    Formula:
+        A12 = (Cliff's Delta + 1.0) / 2.0 = (P(X > Y) + 0.5 * P(X == Y))
+
+    Range:
+        A12 in [0.0, 1.0] (0.5 indicates stochastic equality).
+
+    Args:
+        proposed_scores: Array-like samples for Proposed algorithm.
+        baseline_scores: Array-like samples for Baseline algorithm.
+
+    Returns:
+        float: Vargha-Delaney A12 effect size in [0.0, 1.0].
+    """
+    delta = compute_cliffs_delta(proposed_scores, baseline_scores)
+    return float((delta + 1.0) / 2.0)
+
+
+def holm_bonferroni_correction(
+    p_values: Union[List[float], np.ndarray],
+) -> List[float]:
+    """
+    Apply Holm-Bonferroni step-down correction for multiple hypothesis testing.
+    Controls Family-Wise Error Rate (FWER) without parametric distributional assumptions.
+
+    Step-down procedure:
+        1. Sort raw p-values in ascending order: p_(1) <= p_(2) <= ... <= p_(m).
+        2. Adjust each rank k: p_adj_(k) = min(1.0, max_{j <= k} ((m - j + 1) * p_(j))).
+        3. Restore original input sequence ordering.
+
+    Args:
+        p_values: Sequence of raw p-values from statistical tests.
+
+    Returns:
+        List of adjusted p-values in the original input order.
+    """
+    raw = [float(p) for p in p_values]
+    m = len(raw)
+    if m <= 1:
+        return raw
+
+    # Sort indices by raw p-value ascending
+    indices = np.argsort(raw)
+    sorted_p = np.array(raw, dtype=np.float64)[indices]
+
+    adj_sorted = np.zeros(m, dtype=np.float64)
+    running_max = 0.0
+    for k in range(m):
+        raw_val = (m - k) * sorted_p[k]
+        running_max = max(running_max, raw_val)
+        adj_sorted[k] = min(1.0, running_max)
+
+    # Reorder back to original positions
+    p_holm = np.zeros(m, dtype=np.float64)
+    p_holm[indices] = adj_sorted
+    return [float(p) for p in p_holm]
+
+

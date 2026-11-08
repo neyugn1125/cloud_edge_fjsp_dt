@@ -329,6 +329,12 @@ def train_multi_seed_ppo(
         "all_seed_data": all_seed_data,
     }
 
+    # Persist training history for instant reproducible plotting
+    hist_path = save_path / "ppo_training_history.json"
+    with open(hist_path, "w", encoding="utf-8") as f:
+        json.dump(all_seed_data, f, indent=2)
+    print(f"[+] Full training history persisted to {hist_path}")
+
     return best_model, results_summary
 
 
@@ -343,39 +349,50 @@ def moving_average(data: np.ndarray, window_size: int = 25) -> np.ndarray:
 def plot_ppo_training_curves(
     histories: Dict[str, Any],
     output_path: Union[str, Path] = "tests/phase2_ppo_training_curve.png",
-    baselines_csv: Union[str, Path] = "data/benchmarks/phase1_baseline_results.csv",
+    baselines_csv: Union[str, Path] = "data/benchmarks/phase2_comparison_results.csv",
     cloud_json: Union[str, Path] = "data/benchmarks/cloud_baseline_schedule.json",
     window_size: int = 25,
 ) -> None:
     """
-    Generate publication-standard 3-panel training curves comparing:
-        Panel 1: Episode Return (Mean +- Std)
-        Panel 2: Makespan & TOU Cost reduction vs Rule 2 & NSGA-III
-        Panel 3: Elimination of Tool Breakdowns & Opportunistic PM rate
+    Generate publication-standard 3-panel training curves (300 DPI, IEEE/Elsevier format):
+        Panel (a): Episode Return Convergence (Mean +- 1 Std across 3 seeds)
+        Panel (b): Regime B Makespan & TOU Cost Convergence vs. Phase 2 Baselines (NSGA-III, Right-Shift, Rule 2)
+        Panel (c): Near-Zero Breakdown Elimination & Proactive PM Replacement Stabilization
     """
     out_file = Path(output_path)
     out_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1. Read Reference Baselines
-    rule2_cmax = 78.0
-    rule2_cost = 2.722
-    if Path(baselines_csv).exists():
-        with open(baselines_csv, mode="r", encoding="utf-8") as f:
+    # 1. Read Standardized Reference Baselines from Phase 2 Benchmark Results (Regime B)
+    rule2_cmax = 94.67
+    rule2_cost = 2.455
+    rule2_twt = 424.08
+    nsga3_cmax = 83.64
+    nsga3_cost = 2.570
+    nsga3_twt = 362.67
+    right_shift_cmax = 79.58
+    right_shift_cost = 2.594
+    right_shift_twt = 321.09
+
+    p2_csv = Path(baselines_csv) if baselines_csv else Path("data/benchmarks/phase2_comparison_results.csv")
+    if p2_csv.exists():
+        with open(p2_csv, mode="r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                if str(row["Rule Name"]).startswith("Rule 2"):
-                    rule2_cmax = float(row["Makespan (min)"])
-                    rule2_cost = float(row["TOU Energy Cost ($)"])
+                m_name = str(row.get("Method", ""))
+                if "Rule 2" in m_name:
+                    rule2_cmax = float(row["Makespan Mean (min)"])
+                    rule2_cost = float(row["TOU Cost Mean ($)"])
+                    rule2_twt = float(row.get("TWT Mean (min)", 424.08))
+                elif "NSGA-III Open-Loop" in m_name:
+                    nsga3_cmax = float(row["Makespan Mean (min)"])
+                    nsga3_cost = float(row["TOU Cost Mean ($)"])
+                    nsga3_twt = float(row.get("TWT Mean (min)", 362.67))
+                elif "Right-Shift" in m_name:
+                    right_shift_cmax = float(row["Makespan Mean (min)"])
+                    right_shift_cost = float(row["TOU Cost Mean ($)"])
+                    right_shift_twt = float(row.get("TWT Mean (min)", 321.09))
 
-    nsga3_cmax = 57.80
-    nsga3_cost = 2.451
-    if Path(cloud_json).exists():
-        with open(cloud_json, mode="r", encoding="utf-8") as f:
-            cdata = json.load(f)
-            nsga3_cmax = float(cdata["summary"]["makespan_min"])
-            nsga3_cost = float(cdata["summary"]["tou_energy_cost_usd"])
-
-    seed_data = histories["all_seed_data"]
+    seed_data = histories.get("all_seed_data", histories)
     # Harmonize lengths across seeds
     min_len = min(len(s) for s in seed_data["returns"])
     episodes = np.arange(1, min_len + 1)
@@ -397,7 +414,7 @@ def plot_ppo_training_curves(
     bd_mean, bd_std = np.mean(smoothed_bds, axis=0), np.std(smoothed_bds, axis=0)
     pm_mean, pm_std = np.mean(smoothed_pms, axis=0), np.std(smoothed_pms, axis=0)
 
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 5.2), dpi=300)
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18.5, 5.4), dpi=300)
 
     # -------------------------------------------------------------------------
     # Subplot 1: Episode Return
@@ -411,80 +428,94 @@ def plot_ppo_training_curves(
         alpha=0.25,
         label=r"$\pm 1\sigma$ (3 Seeds)",
     )
-    ax1.set_xlabel("Episode", fontsize=11, fontweight="bold")
+    ax1.set_xlabel("Training Episode", fontsize=11, fontweight="bold")
     ax1.set_ylabel("Cumulative Episode Return", fontsize=11, fontweight="bold")
-    ax1.set_title("Edge PPO: Episode Return Convergence", fontsize=12, fontweight="bold")
+    ax1.set_title("(a) Edge PPO: Episode Return Convergence (Regime B)", fontsize=11, fontweight="bold")
     ax1.grid(True, linestyle="--", alpha=0.5)
     ax1.legend(loc="lower right", fontsize=9)
 
     # -------------------------------------------------------------------------
-    # Subplot 2: Makespan & TOU Cost Reduction
+    # Subplot 2: Makespan & TOU Cost Reduction under Regime B
     # -------------------------------------------------------------------------
     color_cmax = "#6a3d9a"  # Purple
     color_cost = "#33a02c"  # Green
 
-    ax2.plot(ep_axis, cmax_mean, color=color_cmax, linewidth=2.0, label="Makespan (min)")
+    ax2.plot(ep_axis, cmax_mean, color=color_cmax, linewidth=2.2, label="Proposed DT Makespan (min)")
     ax2.fill_between(
         ep_axis,
         cmax_mean - cmax_std,
         cmax_mean + cmax_std,
         color=color_cmax,
-        alpha=0.20,
+        alpha=0.18,
     )
-    # References for Makespan
+    # References for Makespan (Phase 2 Audited Values under Regime B)
     ax2.axhline(
         rule2_cmax,
         color=color_cmax,
         linestyle="--",
-        linewidth=1.4,
-        label=f"Rule 2 Base ({rule2_cmax:.1f}m)",
+        linewidth=1.3,
+        label=f"Rule-EET-Eco: {rule2_cmax:.2f} m, TWT {rule2_twt:.1f} m",
     )
     ax2.axhline(
         nsga3_cmax,
         color=color_cmax,
         linestyle=":",
-        linewidth=1.6,
-        label=f"NSGA-III Target ({nsga3_cmax:.1f}m)",
+        linewidth=1.5,
+        label=f"NSGA-III Open-Loop: {nsga3_cmax:.2f} m, TWT {nsga3_twt:.1f} m",
+    )
+    ax2.axhline(
+        right_shift_cmax,
+        color=color_cmax,
+        linestyle="-.",
+        linewidth=1.3,
+        label=f"Right-Shift: {right_shift_cmax:.2f} m, TWT {right_shift_twt:.1f} m",
     )
 
-    ax2.set_xlabel("Episode", fontsize=11, fontweight="bold")
+    ax2.set_xlabel("Training Episode", fontsize=11, fontweight="bold")
     ax2.set_ylabel("Makespan (min)", color=color_cmax, fontsize=11, fontweight="bold")
     ax2.tick_params(axis="y", labelcolor=color_cmax)
     ax2.grid(True, linestyle="--", alpha=0.5)
 
     # Twin axis for TOU Cost
     ax2_twin = ax2.twinx()
-    ax2_twin.plot(ep_axis, cost_mean, color=color_cost, linewidth=2.0, label="TOU Cost ($)")
+    ax2_twin.plot(ep_axis, cost_mean, color=color_cost, linewidth=2.2, label="Proposed DT TOU Cost ($)")
     ax2_twin.fill_between(
         ep_axis,
         cost_mean - cost_std,
         cost_mean + cost_std,
         color=color_cost,
-        alpha=0.20,
+        alpha=0.18,
     )
     ax2_twin.axhline(
         rule2_cost,
         color=color_cost,
         linestyle="--",
-        linewidth=1.4,
-        label=f"Rule 2 Cost (${rule2_cost:.2f})",
+        linewidth=1.3,
+        label=f"Rule-EET-Eco Cost: ${rule2_cost:.3f}",
     )
     ax2_twin.axhline(
         nsga3_cost,
         color=color_cost,
         linestyle=":",
-        linewidth=1.6,
-        label=f"NSGA-III Cost (${nsga3_cost:.2f})",
+        linewidth=1.5,
+        label=f"NSGA-III Cost: ${nsga3_cost:.3f}",
+    )
+    ax2_twin.axhline(
+        right_shift_cost,
+        color=color_cost,
+        linestyle="-.",
+        linewidth=1.3,
+        label=f"Right-Shift Cost: ${right_shift_cost:.3f}",
     )
 
     ax2_twin.set_ylabel("TOU Energy Cost ($)", color=color_cost, fontsize=11, fontweight="bold")
     ax2_twin.tick_params(axis="y", labelcolor=color_cost)
-    ax2.set_title("Makespan & Energy Cost Optimization", fontsize=12, fontweight="bold")
+    ax2.set_title("(b) Regime B Convergence: Makespan & TOU Cost vs. Baselines", fontsize=11, fontweight="bold")
 
-    # Combine legends
+    # Combine legends cleanly
     lines_1, labels_1 = ax2.get_legend_handles_labels()
     lines_2, labels_2 = ax2_twin.get_legend_handles_labels()
-    ax2.legend(lines_1 + lines_2, labels_1 + labels_2, loc="upper right", fontsize=8)
+    ax2.legend(lines_1 + lines_2, labels_1 + labels_2, loc="upper right", fontsize=7.5, framealpha=0.92)
 
     # -------------------------------------------------------------------------
     # Subplot 3: Tool Breakdown Elimination & PM Policy
@@ -492,7 +523,7 @@ def plot_ppo_training_curves(
     color_bd = "#e31a1c"  # Red
     color_pm = "#1f78b4"  # Blue
 
-    ax3.plot(ep_axis, bd_mean, color=color_bd, linewidth=2.0, label="Breakdowns / Ep")
+    ax3.plot(ep_axis, bd_mean, color=color_bd, linewidth=2.2, label="Tool Breakdowns / Episode")
     ax3.fill_between(
         ep_axis,
         np.maximum(0, bd_mean - bd_std),
@@ -500,13 +531,13 @@ def plot_ppo_training_curves(
         color=color_bd,
         alpha=0.20,
     )
-    ax3.set_xlabel("Episode", fontsize=11, fontweight="bold")
-    ax3.set_ylabel("Emergency Breakdowns / Episode", color=color_bd, fontsize=11, fontweight="bold")
+    ax3.set_xlabel("Training Episode", fontsize=11, fontweight="bold")
+    ax3.set_ylabel("Tool Breakdowns / Episode", color=color_bd, fontsize=11, fontweight="bold")
     ax3.tick_params(axis="y", labelcolor=color_bd)
     ax3.grid(True, linestyle="--", alpha=0.5)
 
     ax3_twin = ax3.twinx()
-    ax3_twin.plot(ep_axis, pm_mean, color=color_pm, linewidth=2.0, linestyle="-.", label="Opportunistic PM / Ep")
+    ax3_twin.plot(ep_axis, pm_mean, color=color_pm, linewidth=2.2, linestyle="-.", label="Proactive PM Replacements / Episode")
     ax3_twin.fill_between(
         ep_axis,
         np.maximum(0, pm_mean - pm_std),
@@ -516,16 +547,20 @@ def plot_ppo_training_curves(
     )
     ax3_twin.set_ylabel("Proactive PM Replacements / Episode", color=color_pm, fontsize=11, fontweight="bold")
     ax3_twin.tick_params(axis="y", labelcolor=color_pm)
-    ax3.set_title("Reliability: Tool Breakdown Elimination", fontsize=12, fontweight="bold")
+    ax3.set_title("(c) Reliability: Zero Breakdown Suppression & Proactive PM", fontsize=11, fontweight="bold")
 
     lines_3, labels_3 = ax3.get_legend_handles_labels()
     lines_4, labels_4 = ax3_twin.get_legend_handles_labels()
-    ax3.legend(lines_3 + lines_4, labels_3 + labels_4, loc="center right", fontsize=8)
+    ax3.legend(lines_3 + lines_4, labels_3 + labels_4, loc="center right", fontsize=8.0, framealpha=0.92)
 
     plt.tight_layout()
-    plt.savefig(out_file, bbox_inches="tight")
+    plt.savefig(out_file, dpi=300, bbox_inches="tight")
+    # Also save to results/ directory if available
+    res_file = Path("results/phase2_ppo_training_curve.png")
+    res_file.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(res_file, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"[Visualization] Training curves successfully saved to {out_file}")
+    print(f"[Visualization] Training curves successfully saved to {out_file} and {res_file}")
 
 
 def main() -> None:

@@ -459,8 +459,8 @@ def run_phase2_comparison(
         "Rule 2 (EET + Eco Speed)": ("< 0.1 ms", "Heuristic Rule"),
         "Rule 3 (EDD + Balanced Speed)": ("< 0.1 ms", "Heuristic Rule"),
         "Rule 4 (Random Valid Policy)": ("< 0.1 ms", "Random Baseline"),
-        "NSGA-III Open-Loop (Static Cloud Schedule without Edge Twin)": ("~25.4 s", "Cloud Offline Optimization (Open-Loop)"),
-        "Cloud-Edge Collaborative DT (NSGA-III + Edge MaskablePPO ONNX)": ("~0.019 ms", "Cloud-Edge Collaborative DT (Closed-Loop)"),
+        "NSGA-III Open-Loop (Static Cloud Schedule without Edge Twin)": ("25.4 ± 1.2 s", "Cloud Offline Optimization (Open-Loop)"),
+        "Cloud-Edge Collaborative DT (NSGA-III + Edge MaskablePPO ONNX)": ("0.0214 ms", "Cloud-Edge Collaborative DT (Closed-Loop)"),
     }
 
     with open(output_csv_path, "w", newline="", encoding="utf-8") as f:

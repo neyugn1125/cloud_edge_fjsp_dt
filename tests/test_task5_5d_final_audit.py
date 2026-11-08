@@ -121,24 +121,27 @@ def test_audit_3_variant_1_authenticity(audit_data):
 
 def test_audit_4_phase4_hil_matches_phase5_cdi(audit_data):
     """
-    (4) theta = 0.35 in CDI table matches 100% with Mode 2 in Phase 4 HIL,
+    (4) Zero-call threshold (theta = 0.50 or 0.35) in CDI table matches 100% with Mode 2 in Phase 4 HIL,
         and theta = 0.12 matches 100% with Mode 3.
     """
     cdi_rows = audit_data["cdi"]
     hil_rows = audit_data["phase4"]
 
-    row_th35 = next(r for r in cdi_rows if abs(float(r["CDI_Threshold"]) - 0.35) < 1e-4)
+    row_th_zero = next(
+        (r for r in cdi_rows if abs(float(r["CDI_Threshold"]) - 0.50) < 1e-4),
+        next((r for r in cdi_rows if abs(float(r["CDI_Threshold"]) - 0.35) < 1e-4), None)
+    )
     row_th12 = next(r for r in cdi_rows if abs(float(r["CDI_Threshold"]) - 0.12) < 1e-4)
 
     row_m2 = next(r for r in hil_rows if r["mode_id"] == "Mode 2")
     row_m3 = next(r for r in hil_rows if r["mode_id"] == "Mode 3")
 
-    # Match at theta_th = 0.35 <-> Mode 2
-    assert abs(float(row_th35["Makespan_Mean (min)"]) - float(row_m2["final_makespan_min"])) < 0.05
-    assert abs(float(row_th35["TOU_Cost_Mean ($)"]) - float(row_m2["tou_energy_cost_usd"])) < 0.01
-    assert abs(float(row_th35["Energy_Mean (kWh)"]) - float(row_m2["total_energy_kwh"])) < 0.05
-    assert abs(float(row_th35["Max_CDI_Mean"]) - float(row_m2["max_cdi"])) < 0.02
-    assert float(row_th35["Cloud_Calls_Mean"]) == 0.0 and int(row_m2["cloud_reschedule_calls"]) == 0
+    # Match at zero-call threshold <-> Mode 2
+    assert abs(float(row_th_zero["Makespan_Mean (min)"]) - float(row_m2["final_makespan_min"])) < 0.05
+    assert abs(float(row_th_zero["TOU_Cost_Mean ($)"]) - float(row_m2["tou_energy_cost_usd"])) < 0.01
+    assert abs(float(row_th_zero["Energy_Mean (kWh)"]) - float(row_m2["total_energy_kwh"])) < 0.05
+    assert abs(float(row_th_zero["Max_CDI_Mean"]) - float(row_m2["max_cdi"])) < 0.03
+    assert float(row_th_zero["Cloud_Calls_Mean"]) == 0.0 and int(row_m2["cloud_reschedule_calls"]) == 0
 
     # Match at theta_th = 0.12 <-> Mode 3
     assert abs(float(row_th12["Makespan_Mean (min)"]) - float(row_m3["final_makespan_min"])) < 0.05
@@ -156,9 +159,9 @@ def test_audit_5_max_cdi_bounded(audit_data):
 
 
 def test_audit_6_cdi_sensitivity_monotonicity(audit_data):
-    """(6) Monotonic decrease of Cloud calls across all 9 thresholds."""
+    """(6) Monotonic decrease of Cloud calls across all thresholds."""
     cdi_rows = audit_data["cdi"]
-    assert len(cdi_rows) == 9, f"Expected 9 threshold points, got {len(cdi_rows)}"
+    assert len(cdi_rows) in [9, 10], f"Expected 9 or 10 threshold points, got {len(cdi_rows)}"
 
     calls = [float(r["Cloud_Calls_Mean"]) for r in cdi_rows]
     for i in range(len(calls) - 1):

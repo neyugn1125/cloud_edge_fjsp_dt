@@ -34,39 +34,31 @@
       }
     },
     "tou_pricing": {
-      "cycle_min": 1440.0,
+      "cycle_min": 100.0,
       "tiers": [
         {
-          "name": "off_peak_1",
+          "name": "off_peak",
           "tier_type": "off_peak",
           "start_min": 0.0,
           "end_min": 25.0,
           "rate_per_kwh": 0.06,
-          "description": "Early shift off-peak window"
+          "description": "Low-demand off-peak window"
         },
         {
-          "name": "on_peak_1",
+          "name": "on_peak",
           "tier_type": "peak",
           "start_min": 25.0,
           "end_min": 60.0,
           "rate_per_kwh": 0.2,
-          "description": "Mid-shift high-demand on-peak window"
+          "description": "High-demand on-peak window"
         },
         {
-          "name": "mid_peak_1",
+          "name": "mid_peak",
           "tier_type": "mid_peak",
           "start_min": 60.0,
           "end_min": 100.0,
           "rate_per_kwh": 0.12,
           "description": "Regular production mid-peak window"
-        },
-        {
-          "name": "on_peak_2",
-          "tier_type": "peak",
-          "start_min": 100.0,
-          "end_min": 1440.0,
-          "rate_per_kwh": 0.2,
-          "description": "Extended on-peak window"
         }
       ]
     }

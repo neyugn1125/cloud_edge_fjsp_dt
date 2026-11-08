@@ -15,7 +15,12 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Union
 
-import paho.mqtt.client as mqtt
+try:
+    import paho.mqtt.client as mqtt
+    PAHO_AVAILABLE = True
+except ImportError:
+    mqtt = None
+    PAHO_AVAILABLE = False
 
 from utils.mqtt_broker import InMemoryMQTTBroker, MQTTMessageMock
 from utils.mqtt_schemas import (
@@ -63,13 +68,13 @@ class EdgeMQTTClient:
         self.sync_history: List[CloudSyncPayload] = []
         self._sync_lock = threading.Lock()
 
-        self._paho_client: Optional[mqtt.Client] = None
+        self._paho_client: Optional[Any] = None
         self._in_memory_broker: Optional[InMemoryMQTTBroker] = None
         self._ready_event = threading.Event()
 
     def start(self, timeout: float = 3.0) -> bool:
         """Connects to the MQTT broker and starts message loop."""
-        if self.force_in_memory:
+        if self.force_in_memory or not PAHO_AVAILABLE:
             return self._start_in_memory()
 
         try:

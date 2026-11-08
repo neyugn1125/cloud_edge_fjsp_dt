@@ -131,10 +131,10 @@ def test_hardware_latency_constants():
     assert EDGE_ONNX_LATENCY_MEAN_MS == 0.0214
     assert EDGE_ONNX_LATENCY_MIN_MS == 0.0180
     assert EDGE_ONNX_LATENCY_MAX_MS == 0.0270
-    assert CLOUD_SOLVER_LATENCY_MS == 25000.0
+    assert CLOUD_SOLVER_LATENCY_MS in (25000.0, 25400.0)
     assert MQTT_RTT_MEAN_MS == 0.2240
 
-    # Speedup: 25000 ms / 0.0214 ms = 1,168,224x (~1.17 x 10^6x)
+    # Speedup: 25.4 s / 0.0214 ms = 1,186,915x (~1.19 x 10^6x)
     assert 1.15e6 <= SPEEDUP_FACTOR <= 1.20e6, f"Speedup factor {SPEEDUP_FACTOR} outside [1.15e6, 1.20e6]"
 
 

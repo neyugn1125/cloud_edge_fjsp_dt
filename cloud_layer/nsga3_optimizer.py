@@ -59,6 +59,23 @@ from sim_env.physical_machine import CNCPhysicalTwin
 from utils.mqtt_schemas import SystemConfig, load_system_config
 
 
+def get_tou_rate(time_min: float) -> float:
+    """
+    Get electricity tariff ($/kWh) for any simulation time in minutes
+    according to the repeating 100-min cyclic TOU schedule:
+      - [0.0, 25.0): Off-Peak ($0.06/kWh)
+      - [25.0, 60.0): On-Peak ($0.20/kWh)
+      - [60.0, 100.0): Mid-Peak ($0.12/kWh)
+    """
+    t_cycle = time_min % 100.0
+    if t_cycle < 25.0:
+        return 0.06
+    elif t_cycle < 60.0:
+        return 0.20
+    else:
+        return 0.12
+
+
 class GreenFJSPProblem(ElementwiseProblem):
     """
     Multi-Objective Green Flexible Job Shop Scheduling Problem for pymoo.

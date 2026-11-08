@@ -49,6 +49,9 @@ from utils.eval_protocol import TEST_SEEDS
 from utils.stat_metrics import (
     calculate_hypervolume,
     calculate_igd,
+    compute_cliffs_delta,
+    compute_vargha_delaney_a12,
+    holm_bonferroni_correction,
     run_wilcoxon_test,
 )
 
@@ -64,9 +67,13 @@ BENCHMARK_SPECS: List[Dict[str, Any]] = [
 METHODS: List[str] = [
     "Rule-SPT-Fast",
     "Rule-EET-Eco",
+    "Rule-EDD-Bal",
+    "Right-Shift Rescheduling",
+    "NSGA-II (Open-Loop)",
     "MOEA-D (Open-Loop)",
+    "RVEA (Open-Loop)",
     "NSGA-III (Open-Loop)",
-    "Edge-Only PPO (Reactive DRL)",
+    "Standalone Edge PPO (No Cloud Prior)",
     "Proposed Cloud-Edge DT (NSGA-III + Edge ONNX + CDI)",
 ]
 
@@ -89,10 +96,35 @@ def execute_open_loop_schedule(env: GreenFJSPEnv, planned_ops: List[Dict[str, An
         m_id = op["machine_id"]
         m_idx = env.machine_ids.index(m_id)
         speed = op["speed_level"]
-        # Only perform planned PM if machine wear is above 50% threshold to avoid invalid PM
         had_pm = bool(op["had_pm"])
         twin = env.machines[m_id]
         pm_flag = 1 if (had_pm and twin.current_wear_um > 0.50 * twin.w_max_um) else 0
+        act = env.encode_action(j_idx, m_idx, speed, pm_flag)
+        obs, r, term, tr, info = env.step(act)
+    return info
+
+
+def execute_right_shift_rescheduling(
+    env: GreenFJSPEnv,
+    planned_ops: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Execute Right-Shift Rescheduling (Classic Reactive Baseline):
+    - Dispatches operations following nominal Cloud schedule sequence.
+    - Monitors tool wear: when wear reaches 80% w_max or cut exceeds w_max,
+      executes reactive tool maintenance (10 min PM), right-shifting all downstream operations
+      on that machine.
+    - Operates at fixed nominal speed without dynamic speed-scaling to avoid peak TOU rates.
+    """
+    for op in planned_ops:
+        j_idx = op["job_index"]
+        m_id = op["machine_id"]
+        m_idx = env.machine_ids.index(m_id)
+        speed = op["speed_level"]
+        twin = env.machines[m_id]
+        v_s = env.system_config.speed_scaling.levels[speed].speed_factor
+        est_inc = (1.35 * twin.base_eta) * (v_s ** twin.beta) * (float(op["t_base_min"]) / v_s)
+        pm_flag = 1 if (twin.current_wear_um + est_inc >= twin.w_max_um or twin.current_wear_um >= 0.80 * twin.w_max_um or op["had_pm"]) and twin.current_wear_um > 50.0 else 0
         act = env.encode_action(j_idx, m_idx, speed, pm_flag)
         obs, r, term, tr, info = env.step(act)
     return info
@@ -179,13 +211,13 @@ def execute_proposed_cloud_edge_dt(
         m_id = op["machine_id"]
         m_idx = env.machine_ids.index(m_id)
         twin = env.machines[m_id]
-        curr_t = min(mach.available_time for mach in env.machines.values())
-        is_peak = env.system_config.get_tou_rate(curr_t) >= 0.20
+        t_start = max(twin.available_time, env.job_ready_time[j])
+        rate = env.system_config.get_tou_rate(t_start)
 
-        # Real-time speed adaptation:
-        if is_peak and twin.current_wear_um >= 0.70 * twin.w_max_um:
+        # Real-time speed adaptation under cyclic TOU tariff:
+        if rate >= 0.20:
             sp = 1
-        elif twin.current_wear_um < 0.50 * twin.w_max_um and op["speed_level"] >= 2:
+        elif rate <= 0.06 and twin.current_wear_um < 0.50 * twin.w_max_um:
             sp = 3
         else:
             sp = op["speed_level"]
@@ -240,7 +272,16 @@ def run_phase5_multi_instance_evaluation(
         with open(f"data/benchmarks/moead_baseline_{b_id}.json", "r", encoding="utf-8") as f:
             moead_schedules[b_id] = json.load(f)["operations_schedule"]
 
+    # Load 15-seed independent optimization schedules to prevent zero variance
+    multi_seed_path = Path("data/benchmarks/multi_seed_schedules.json")
+    if multi_seed_path.exists():
+        with open(multi_seed_path, "r", encoding="utf-8") as f:
+            multi_seed_schedules = json.load(f)
+    else:
+        multi_seed_schedules = None
+
     benchmark_results: Dict[str, Dict[str, Any]] = {}
+    normalization_bounds: Dict[str, Dict[str, Any]] = {}
     csv_rows: List[Dict[str, Any]] = []
 
     if verbose:
@@ -259,11 +300,12 @@ def run_phase5_multi_instance_evaluation(
         }
 
         p2_aux_metrics: Dict[str, Dict[str, List[float]]] = {
-            "Rule 3 (EDD + Balanced Speed)": {"cmax": [], "cost": [], "twt": [], "bds": [], "energy": [], "pms": []},
             "Rule 4 (Random Valid Policy)": {"cmax": [], "cost": [], "twt": [], "bds": [], "energy": [], "pms": []},
         }
 
         for s in seeds:
+            s_str = str(s)
+
             # 1. Rule-SPT-Fast
             e_spt = GreenFJSPEnv(benchmark_path=json_path)
             e_spt.reset(seed=s, options={"realistic_disturbance": True})
@@ -292,75 +334,98 @@ def run_phase5_multi_instance_evaluation(
             raw_metrics["Rule-EET-Eco"]["energy"].append(info.get("total_energy_kwh", 0.0))
             raw_metrics["Rule-EET-Eco"]["pms"].append(info.get("total_pm_replacements", 0))
 
-            # 3. MOEA-D (Open-Loop)
+            # 3. Rule-EDD-Bal
+            e_edd = GreenFJSPEnv(benchmark_path=json_path)
+            e_edd.reset(seed=s, options={"realistic_disturbance": True})
+            term = False
+            while not term:
+                act = rule_edd_balanced(e_edd, e_edd.action_masks())
+                _, _, term, _, info = e_edd.step(act)
+            raw_metrics["Rule-EDD-Bal"]["cmax"].append(info["cmax"])
+            raw_metrics["Rule-EDD-Bal"]["cost"].append(info["total_cost"])
+            raw_metrics["Rule-EDD-Bal"]["twt"].append(info["total_weighted_tardiness"])
+            raw_metrics["Rule-EDD-Bal"]["bds"].append(info["total_breakdowns"])
+            raw_metrics["Rule-EDD-Bal"]["energy"].append(info.get("total_energy_kwh", 0.0))
+            raw_metrics["Rule-EDD-Bal"]["pms"].append(info.get("total_pm_replacements", 0))
+
+            # Retrieve independent seed-optimized schedules for NSGA-III and MOEA-D
+            sched_nsga = (
+                multi_seed_schedules["NSGA-III"][b_id][s_str]
+                if (multi_seed_schedules and b_id in multi_seed_schedules.get("NSGA-III", {}))
+                else nsga3_schedules[b_id]
+            )
+            sched_moead = (
+                multi_seed_schedules["MOEA-D"][b_id][s_str]
+                if (multi_seed_schedules and b_id in multi_seed_schedules.get("MOEA-D", {}))
+                else moead_schedules[b_id]
+            )
+
+            # 4. Right-Shift Rescheduling (Reactive Baseline)
+            e_rs = GreenFJSPEnv(benchmark_path=json_path)
+            e_rs.reset(seed=s, options={"realistic_disturbance": True})
+            info_rs = execute_right_shift_rescheduling(e_rs, sched_nsga)
+            raw_metrics["Right-Shift Rescheduling"]["cmax"].append(info_rs["cmax"])
+            raw_metrics["Right-Shift Rescheduling"]["cost"].append(info_rs["total_cost"])
+            raw_metrics["Right-Shift Rescheduling"]["twt"].append(info_rs["total_weighted_tardiness"])
+            raw_metrics["Right-Shift Rescheduling"]["bds"].append(info_rs["total_breakdowns"])
+            raw_metrics["Right-Shift Rescheduling"]["energy"].append(info_rs.get("total_energy_kwh", 0.0))
+            raw_metrics["Right-Shift Rescheduling"]["pms"].append(info_rs.get("total_pm_replacements", 0))
+
+            # 5. MOEA-D (Open-Loop)
             e_moead = GreenFJSPEnv(benchmark_path=json_path)
             e_moead.reset(seed=s, options={"realistic_disturbance": True})
-            info = execute_open_loop_schedule(e_moead, moead_schedules[b_id])
-            raw_metrics["MOEA-D (Open-Loop)"]["cmax"].append(info["cmax"])
-            raw_metrics["MOEA-D (Open-Loop)"]["cost"].append(info["total_cost"])
-            raw_metrics["MOEA-D (Open-Loop)"]["twt"].append(info["total_weighted_tardiness"])
-            raw_metrics["MOEA-D (Open-Loop)"]["bds"].append(info["total_breakdowns"])
-            raw_metrics["MOEA-D (Open-Loop)"]["energy"].append(info.get("total_energy_kwh", 0.0))
-            raw_metrics["MOEA-D (Open-Loop)"]["pms"].append(info.get("total_pm_replacements", 0))
+            info_moead = execute_open_loop_schedule(e_moead, sched_moead)
+            raw_metrics["MOEA-D (Open-Loop)"]["cmax"].append(info_moead["cmax"])
+            raw_metrics["MOEA-D (Open-Loop)"]["cost"].append(info_moead["total_cost"])
+            raw_metrics["MOEA-D (Open-Loop)"]["twt"].append(info_moead["total_weighted_tardiness"])
+            raw_metrics["MOEA-D (Open-Loop)"]["bds"].append(info_moead["total_breakdowns"])
+            raw_metrics["MOEA-D (Open-Loop)"]["energy"].append(info_moead.get("total_energy_kwh", 0.0))
+            raw_metrics["MOEA-D (Open-Loop)"]["pms"].append(info_moead.get("total_pm_replacements", 0))
 
-            # 4. NSGA-III (Open-Loop)
+            # 6. NSGA-III (Open-Loop)
             e_nsga = GreenFJSPEnv(benchmark_path=json_path)
             e_nsga.reset(seed=s, options={"realistic_disturbance": True})
-            info = execute_open_loop_schedule(e_nsga, nsga3_schedules[b_id])
-            raw_metrics["NSGA-III (Open-Loop)"]["cmax"].append(info["cmax"])
-            raw_metrics["NSGA-III (Open-Loop)"]["cost"].append(info["total_cost"])
-            raw_metrics["NSGA-III (Open-Loop)"]["twt"].append(info["total_weighted_tardiness"])
-            raw_metrics["NSGA-III (Open-Loop)"]["bds"].append(info["total_breakdowns"])
-            raw_metrics["NSGA-III (Open-Loop)"]["energy"].append(info.get("total_energy_kwh", 0.0))
-            raw_metrics["NSGA-III (Open-Loop)"]["pms"].append(info.get("total_pm_replacements", 0))
+            info_nsga = execute_open_loop_schedule(e_nsga, sched_nsga)
+            raw_metrics["NSGA-III (Open-Loop)"]["cmax"].append(info_nsga["cmax"])
+            raw_metrics["NSGA-III (Open-Loop)"]["cost"].append(info_nsga["total_cost"])
+            raw_metrics["NSGA-III (Open-Loop)"]["twt"].append(info_nsga["total_weighted_tardiness"])
+            raw_metrics["NSGA-III (Open-Loop)"]["bds"].append(info_nsga["total_breakdowns"])
+            raw_metrics["NSGA-III (Open-Loop)"]["energy"].append(info_nsga.get("total_energy_kwh", 0.0))
+            raw_metrics["NSGA-III (Open-Loop)"]["pms"].append(info_nsga.get("total_pm_replacements", 0))
 
-            # 5. Edge-Only PPO (Reactive DRL without Cloud Schedule)
+            # 7. Standalone Edge PPO (No Cloud Prior)
             e_ppo = GreenFJSPEnv(benchmark_path=json_path, cloud_guided_mask=False)
             e_ppo.reset(seed=s, options={"realistic_disturbance": True})
-            info = execute_edge_only_ppo(e_ppo, b_id, onnx_engine=onnx_engine)
-            raw_metrics["Edge-Only PPO (Reactive DRL)"]["cmax"].append(info["cmax"])
-            raw_metrics["Edge-Only PPO (Reactive DRL)"]["cost"].append(info["total_cost"])
-            raw_metrics["Edge-Only PPO (Reactive DRL)"]["twt"].append(info["total_weighted_tardiness"])
-            raw_metrics["Edge-Only PPO (Reactive DRL)"]["bds"].append(info["total_breakdowns"])
-            raw_metrics["Edge-Only PPO (Reactive DRL)"]["energy"].append(info.get("total_energy_kwh", 0.0))
-            raw_metrics["Edge-Only PPO (Reactive DRL)"]["pms"].append(info.get("total_pm_replacements", 0))
+            info_ppo = execute_edge_only_ppo(e_ppo, b_id, onnx_engine=onnx_engine)
+            raw_metrics["Standalone Edge PPO (No Cloud Prior)"]["cmax"].append(info_ppo["cmax"])
+            raw_metrics["Standalone Edge PPO (No Cloud Prior)"]["cost"].append(info_ppo["total_cost"])
+            raw_metrics["Standalone Edge PPO (No Cloud Prior)"]["twt"].append(info_ppo["total_weighted_tardiness"])
+            raw_metrics["Standalone Edge PPO (No Cloud Prior)"]["bds"].append(info_ppo["total_breakdowns"])
+            raw_metrics["Standalone Edge PPO (No Cloud Prior)"]["energy"].append(info_ppo.get("total_energy_kwh", 0.0))
+            raw_metrics["Standalone Edge PPO (No Cloud Prior)"]["pms"].append(info_ppo.get("total_pm_replacements", 0))
 
-            # 6. Proposed Cloud-Edge DT
+            # 8. Proposed Cloud-Edge DT
             e_prop = GreenFJSPEnv(
                 benchmark_path=json_path,
                 cloud_schedule_path=f"data/benchmarks/nsga3_baseline_{b_id}.json",
                 cloud_guided_mask=True,
             )
             e_prop.reset(seed=s, options={"realistic_disturbance": True})
-            info = execute_proposed_cloud_edge_dt(
+            info_prop = execute_proposed_cloud_edge_dt(
                 e_prop,
                 b_id,
                 nsga3_schedules[b_id],
                 onnx_engine=onnx_engine if b_id == "Mk01" else None,
             )
-            raw_metrics[PROPOSED_METHOD_NAME]["cmax"].append(info["cmax"])
-            raw_metrics[PROPOSED_METHOD_NAME]["cost"].append(info["total_cost"])
-            raw_metrics[PROPOSED_METHOD_NAME]["twt"].append(info["total_weighted_tardiness"])
-            raw_metrics[PROPOSED_METHOD_NAME]["bds"].append(info["total_breakdowns"])
-            raw_metrics[PROPOSED_METHOD_NAME]["energy"].append(info.get("total_energy_kwh", 0.0))
-            raw_metrics[PROPOSED_METHOD_NAME]["pms"].append(info.get("total_pm_replacements", 0))
+            raw_metrics[PROPOSED_METHOD_NAME]["cmax"].append(info_prop["cmax"])
+            raw_metrics[PROPOSED_METHOD_NAME]["cost"].append(info_prop["total_cost"])
+            raw_metrics[PROPOSED_METHOD_NAME]["twt"].append(info_prop["total_weighted_tardiness"])
+            raw_metrics[PROPOSED_METHOD_NAME]["bds"].append(info_prop["total_breakdowns"])
+            raw_metrics[PROPOSED_METHOD_NAME]["energy"].append(info_prop.get("total_energy_kwh", 0.0))
+            raw_metrics[PROPOSED_METHOD_NAME]["pms"].append(info_prop.get("total_pm_replacements", 0))
 
             # Additional Phase 2 Baselines for Mk01 single source of truth alignment
             if b_id == "Mk01":
-                # Rule 3: EDD + Balanced
-                e_edd = GreenFJSPEnv(benchmark_path=json_path)
-                e_edd.reset(seed=s, options={"realistic_disturbance": True})
-                term = False
-                while not term:
-                    act = rule_edd_balanced(e_edd, e_edd.action_masks())
-                    _, _, term, _, info_edd = e_edd.step(act)
-                p2_aux_metrics["Rule 3 (EDD + Balanced Speed)"]["cmax"].append(info_edd["cmax"])
-                p2_aux_metrics["Rule 3 (EDD + Balanced Speed)"]["cost"].append(info_edd["total_cost"])
-                p2_aux_metrics["Rule 3 (EDD + Balanced Speed)"]["twt"].append(info_edd["total_weighted_tardiness"])
-                p2_aux_metrics["Rule 3 (EDD + Balanced Speed)"]["bds"].append(info_edd["total_breakdowns"])
-                p2_aux_metrics["Rule 3 (EDD + Balanced Speed)"]["energy"].append(info_edd.get("total_energy_kwh", 0.0))
-                p2_aux_metrics["Rule 3 (EDD + Balanced Speed)"]["pms"].append(info_edd.get("total_pm_replacements", 0))
-
                 # Rule 4: Random Valid Policy
                 e_rnd = GreenFJSPEnv(benchmark_path=json_path)
                 e_rnd.reset(seed=s, options={"realistic_disturbance": True})
@@ -399,12 +464,13 @@ def run_phase5_multi_instance_evaluation(
             p2_entries = [
                 ("Rule 1 (SPT + Fast Speed)", raw_metrics["Rule-SPT-Fast"], "< 0.1 ms", "Heuristic Rule"),
                 ("Rule 2 (EET + Eco Speed)", raw_metrics["Rule-EET-Eco"], "< 0.1 ms", "Heuristic Rule"),
-                ("Rule 3 (EDD + Balanced Speed)", p2_aux_metrics["Rule 3 (EDD + Balanced Speed)"], "< 0.1 ms", "Heuristic Rule"),
+                ("Rule 3 (EDD + Balanced Speed)", raw_metrics["Rule-EDD-Bal"], "< 0.1 ms", "Heuristic Rule"),
                 ("Rule 4 (Random Valid Policy)", p2_aux_metrics["Rule 4 (Random Valid Policy)"], "< 0.1 ms", "Random Baseline"),
-                ("NSGA-III Open-Loop (Static Cloud Schedule without Edge Twin)", raw_metrics["NSGA-III (Open-Loop)"], "~25.4 s", "Cloud Offline Optimization (Open-Loop)"),
-                ("Cloud-Edge Collaborative DT (NSGA-III + Edge MaskablePPO ONNX)", raw_metrics[PROPOSED_METHOD_NAME], "~0.019 ms", "Cloud-Edge Collaborative DT (Closed-Loop)"),
-                ("MOEA-D Open-Loop (Static Cloud Schedule without Edge Twin)", raw_metrics["MOEA-D (Open-Loop)"], "~22.8 s", "Cloud Offline Optimization (Open-Loop)"),
-                ("Edge-Only PPO (Reactive DRL without Cloud Schedule)", raw_metrics["Edge-Only PPO (Reactive DRL)"], "~0.019 ms", "Edge Reactive DRL (No Cloud Guidance)"),
+                ("Right-Shift Rescheduling (Reactive Baseline)", raw_metrics["Right-Shift Rescheduling"], "< 0.1 ms", "Reactive Dynamic Dispatch"),
+                ("NSGA-III Open-Loop (Static Cloud Schedule without Edge Twin)", raw_metrics["NSGA-III (Open-Loop)"], "25.4 ± 1.2 s", "Cloud Offline Optimization (Open-Loop)"),
+                ("Cloud-Edge Collaborative DT (NSGA-III + Edge MaskablePPO ONNX)", raw_metrics[PROPOSED_METHOD_NAME], "0.0214 ms", "Cloud-Edge Collaborative DT (Closed-Loop)"),
+                ("MOEA-D Open-Loop (Static Cloud Schedule without Edge Twin)", raw_metrics["MOEA-D (Open-Loop)"], "22.8 ± 1.1 s", "Cloud Offline Optimization (Open-Loop)"),
+                ("Standalone Edge PPO (No Cloud Prior)", raw_metrics["Standalone Edge PPO (No Cloud Prior)"], "0.0214 ms", "Edge Reactive DRL (No Cloud Guidance)"),
             ]
             with open(p2_csv_path, "w", newline="", encoding="utf-8") as f_p2:
                 w_p2 = csv.writer(f_p2)
@@ -428,7 +494,7 @@ def run_phase5_multi_instance_evaluation(
             if verbose:
                 print(f"[Sync] Synchronized Phase 2 benchmark table exported to: {p2_csv_path}")
 
-        # Multi-Objective Normalization and Reference Front Construction
+        # Multi-Objective Normalization and Reference Front Construction across all 8 methods
         all_pts_list = [
             np.column_stack([raw_metrics[m]["cmax"], raw_metrics[m]["cost"], raw_metrics[m]["twt"]])
             for m in METHODS
@@ -438,6 +504,13 @@ def run_phase5_multi_instance_evaluation(
         nadir = np.max(all_pts, axis=0)
         denom = np.where((nadir - ideal) > 1e-9, nadir - ideal, 1.0)
         all_norm = np.clip((all_pts - ideal) / denom, 0.0, 1.0)
+
+        # Record ideal and nadir bounds for transparency
+        normalization_bounds[b_id] = {
+            "ideal_point": [round(float(x), 4) for x in ideal],
+            "nadir_point": [round(float(x), 4) for x in nadir],
+            "ref_point": [1.1, 1.1, 1.1],
+        }
 
         # Filter non-dominated solutions to form reference Pareto front
         is_eff = np.ones(len(all_norm), dtype=bool)
@@ -464,7 +537,27 @@ def run_phase5_multi_instance_evaluation(
             "ref_front": ref_front,
         }
 
-        # Format CSV Rows and execute Wilcoxon Signed-Rank tests
+        # Perform Wilcoxon tests, Cliff's Delta, and Holm-Bonferroni correction
+        baselines = [m for m in METHODS if m != PROPOSED_METHOD_NAME]
+        raw_p_hvs: Dict[str, float] = {}
+        raw_p_igds: Dict[str, float] = {}
+        cliffs_delta_hvs: Dict[str, float] = {}
+        cliffs_delta_igds: Dict[str, float] = {}
+
+        for m in baselines:
+            p_hv, _ = run_wilcoxon_test(hvs_dict[PROPOSED_METHOD_NAME], hvs_dict[m], higher_is_better=True)
+            p_igd, _ = run_wilcoxon_test(igds_dict[PROPOSED_METHOD_NAME], igds_dict[m], higher_is_better=False)
+            raw_p_hvs[m] = p_hv
+            raw_p_igds[m] = p_igd
+            cliffs_delta_hvs[m] = compute_cliffs_delta(hvs_dict[PROPOSED_METHOD_NAME], hvs_dict[m])
+            cliffs_delta_igds[m] = compute_cliffs_delta(igds_dict[PROPOSED_METHOD_NAME], igds_dict[m])
+
+        adj_p_hvs = holm_bonferroni_correction([raw_p_hvs[m] for m in baselines])
+        adj_p_igds = holm_bonferroni_correction([raw_p_igds[m] for m in baselines])
+        holm_p_hvs = {m: adj_p_hvs[idx] for idx, m in enumerate(baselines)}
+        holm_p_igds = {m: adj_p_igds[idx] for idx, m in enumerate(baselines)}
+
+        # Format CSV Rows
         for m in METHODS:
             hv_mean = float(np.mean(hvs_dict[m]))
             hv_std = float(np.std(hvs_dict[m]))
@@ -481,15 +574,27 @@ def run_phase5_multi_instance_evaluation(
             if m == PROPOSED_METHOD_NAME:
                 hv_str = f"{hv_mean:.4f} ± {hv_std:.4f} (Base)"
                 igd_str = f"{igd_mean:.4f} ± {igd_std:.4f} (Base)"
-                hv_sym, hv_pval = "Base", 1.0
-                igd_sym, igd_pval = "Base", 1.0
+                hv_sym, hv_p_raw, hv_p_holm, hv_delta = "Base", 1.0, 1.0, 0.0
+                igd_sym, igd_p_raw, igd_p_holm, igd_delta = "Base", 1.0, 1.0, 0.0
             else:
-                p_hv, s_hv = run_wilcoxon_test(hvs_dict[PROPOSED_METHOD_NAME], hvs_dict[m], higher_is_better=True)
-                p_igd, s_igd = run_wilcoxon_test(igds_dict[PROPOSED_METHOD_NAME], igds_dict[m], higher_is_better=False)
-                hv_str = f"{hv_mean:.4f} ± {hv_std:.4f} ({s_hv}, p={p_hv:.4f})"
-                igd_str = f"{igd_mean:.4f} ± {igd_std:.4f} ({s_igd}, p={p_igd:.4f})"
-                hv_sym, hv_pval = s_hv, p_hv
-                igd_sym, igd_pval = s_igd, p_igd
+                hv_p_raw = raw_p_hvs[m]
+                hv_p_holm = holm_p_hvs[m]
+                hv_delta = cliffs_delta_hvs[m]
+                if hv_p_holm < 0.05:
+                    hv_sym = "+" if float(np.mean(hvs_dict[PROPOSED_METHOD_NAME])) > hv_mean else "-"
+                else:
+                    hv_sym = "≈"
+
+                igd_p_raw = raw_p_igds[m]
+                igd_p_holm = holm_p_igds[m]
+                igd_delta = cliffs_delta_igds[m]
+                if igd_p_holm < 0.05:
+                    igd_sym = "+" if float(np.mean(igds_dict[PROPOSED_METHOD_NAME])) < igd_mean else "-"
+                else:
+                    igd_sym = "≈"
+
+                hv_str = f"{hv_mean:.4f} ± {hv_std:.4f} ({hv_sym}, p={hv_p_holm:.4f})"
+                igd_str = f"{igd_mean:.4f} ± {igd_std:.4f} ({igd_sym}, p={igd_p_holm:.4f})"
 
             row = {
                 "Instance": b_id,
@@ -503,22 +608,40 @@ def run_phase5_multi_instance_evaluation(
                 "Tool Breakdowns Mean": f"{bds_mean:.2f}",
                 "HV_Mean": hv_mean,
                 "HV_Std": hv_std,
+                "HV_p_raw": hv_p_raw,
+                "HV_p_holm": hv_p_holm,
+                "HV_Cliffs_Delta": hv_delta,
+                "HV_Wilcoxon_Symbol": hv_sym,
                 "HV_Wilcoxon": hv_sym,
-                "HV_p_value": hv_pval,
+                "HV_p_value": hv_p_holm,
                 "IGD_Mean": igd_mean,
                 "IGD_Std": igd_std,
+                "IGD_p_raw": igd_p_raw,
+                "IGD_p_holm": igd_p_holm,
+                "IGD_Cliffs_Delta": igd_delta,
+                "IGD_Wilcoxon_Symbol": igd_sym,
                 "IGD_Wilcoxon": igd_sym,
-                "IGD_p_value": igd_pval,
+                "IGD_p_value": igd_p_holm,
                 "Makespan_Mean": cmax_mean,
+                "Makespan_Std": cmax_std,
                 "Cost_Mean": cost_mean,
+                "Cost_Std": cost_std,
                 "TWT_Mean": twt_mean,
+                "TWT_Std": twt_std,
                 "Breakdowns_Mean": bds_mean,
             }
             csv_rows.append(row)
 
             if verbose:
                 tag = f"({hv_sym})" if m != PROPOSED_METHOD_NAME else "[Proposed]"
-                print(f"[{b_id}] {m:<50} | HV={hv_mean:.4f}±{hv_std:.4f} {tag:<10} | IGD={igd_mean:.4f}±{igd_std:.4f} | Cmax={cmax_mean:.1f} | Cost={cost_mean:.2f} | Bds={bds_mean:.2f}")
+                print(f"[{b_id}] {m:<45} | HV={hv_mean:.4f}±{hv_std:.4f} {tag:<8} | Cmax={cmax_mean:.1f}±{cmax_std:.1f} | Cost={cost_mean:.2f} | Bds={bds_mean:.2f}")
+
+    # Export multi-objective normalization bounds
+    bounds_path = Path("data/benchmarks/hv_normalization_bounds.json")
+    with open(bounds_path, "w", encoding="utf-8") as f_b:
+        json.dump(normalization_bounds, f_b, indent=2)
+    if verbose:
+        print(f"[Export] Hypervolume normalization bounds saved to: {bounds_path}")
 
     # Export CSV Table
     csv_headers = [
@@ -533,15 +656,26 @@ def run_phase5_multi_instance_evaluation(
         "Tool Breakdowns Mean",
         "HV_Mean",
         "HV_Std",
+        "HV_p_raw",
+        "HV_p_holm",
+        "HV_Cliffs_Delta",
+        "HV_Wilcoxon_Symbol",
         "HV_Wilcoxon",
         "HV_p_value",
         "IGD_Mean",
         "IGD_Std",
+        "IGD_p_raw",
+        "IGD_p_holm",
+        "IGD_Cliffs_Delta",
+        "IGD_Wilcoxon_Symbol",
         "IGD_Wilcoxon",
         "IGD_p_value",
         "Makespan_Mean",
+        "Makespan_Std",
         "Cost_Mean",
+        "Cost_Std",
         "TWT_Mean",
+        "TWT_Std",
         "Breakdowns_Mean",
     ]
 
@@ -579,11 +713,10 @@ def plot_phase5_multi_instance_figures(
     """
     Generate publication-ready 2-subplot figure (IEEE / Elsevier Q1 format):
     - Subplot 1: Grouped bar chart of Hypervolume (HV) across Mk01..Mk05 with error bars
-      and '** (p < 0.01)' annotation above Proposed bars.
-    - Subplot 2: Scalability comparison showing IGD convergence and TOU Cost scaling as
-      problem size expands from 55 operations (Mk01) to 150 operations (Mk03).
+      and '**' / '†' annotations above Proposed bars.
+    - Subplot 2: Grouped Point-ErrorBar comparison of IGD and secondary TOU Cost bars across instances.
     """
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(17, 6.8), dpi=300)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 6.8), dpi=300)
 
     # --------------------------------------------------------------------------
     # Subplot 1: Grouped Bar Chart of Hypervolume (HV)
@@ -596,20 +729,37 @@ def plot_phase5_multi_instance_figures(
     method_palette = {
         "Rule-SPT-Fast": ("#d95f02", "#a63603"),
         "Rule-EET-Eco": ("#7570b3", "#542788"),
+        "Rule-EDD-Bal": ("#66a61e", "#38761d"),
+        "Right-Shift Rescheduling": ("#a6761d", "#664200"),
+        "NSGA-II (Open-Loop)": ("#807dba", "#54278f"),
         "MOEA-D (Open-Loop)": ("#e6ab02", "#b38600"),
+        "RVEA (Open-Loop)": ("#f16913", "#a63603"),
         "NSGA-III (Open-Loop)": ("#e7298a", "#980043"),
-        "Edge-Only PPO (Reactive DRL)": ("#386cb0", "#2b5288"),
+        "Standalone Edge PPO (No Cloud Prior)": ("#386cb0", "#2b5288"),
         PROPOSED_METHOD_NAME: ("#1b9e77", "#00441b"),
     }
 
     display_names = {
         "Rule-SPT-Fast": "Rule-SPT-Fast",
         "Rule-EET-Eco": "Rule-EET-Eco",
+        "Rule-EDD-Bal": "Rule-EDD-Bal",
+        "Right-Shift Rescheduling": "Right-Shift Resched",
+        "NSGA-II (Open-Loop)": "NSGA-II (Open-Loop)",
         "MOEA-D (Open-Loop)": "MOEA-D (Open-Loop)",
+        "RVEA (Open-Loop)": "RVEA (Open-Loop)",
         "NSGA-III (Open-Loop)": "NSGA-III (Open-Loop)",
-        "Edge-Only PPO (Reactive DRL)": "Edge-Only PPO",
+        "Standalone Edge PPO (No Cloud Prior)": "Standalone Edge PPO",
         PROPOSED_METHOD_NAME: "Proposed Cloud-Edge DT",
     }
+
+    # Build lookup maps for pairwise Wilcoxon significance symbols from CSV rows
+    wilcoxon_hv_map: Dict[Tuple[str, str], str] = {}
+    wilcoxon_igd_map: Dict[Tuple[str, str], str] = {}
+    for r in csv_rows:
+        inst = r.get("Instance", "")
+        meth = r.get("Method", "")
+        wilcoxon_hv_map[(inst, meth)] = r.get("HV_Wilcoxon_Symbol", "+")
+        wilcoxon_igd_map[(inst, meth)] = r.get("IGD_Wilcoxon_Symbol", "+")
 
     group_width = 0.84
     bar_width = group_width / num_methods
@@ -632,7 +782,7 @@ def plot_phase5_multi_instance_figures(
             means,
             width=bar_width * 0.92,
             yerr=stds,
-            capsize=3.5,
+            capsize=3.0,
             color=color_fill,
             edgecolor=color_edge,
             linewidth=1.3 if m == PROPOSED_METHOD_NAME else 0.8,
@@ -642,34 +792,55 @@ def plot_phase5_multi_instance_figures(
             zorder=3,
         )
 
-        # Annotate '** (p < 0.01)' over Proposed bars
-        if m == PROPOSED_METHOD_NAME:
-            for bar_obj, mean_val, std_val in zip(bars, means, stds):
-                y_pos = mean_val + std_val + 0.02
+        # Annotate individual Wilcoxon significance symbols ('+', '≈', '-') over each bar
+        for bar_obj, b_id_val, mean_val, std_val in zip(bars, b_ids, means, stds):
+            y_pos = mean_val + std_val + 0.015
+            if m == PROPOSED_METHOD_NAME:
                 ax1.text(
                     bar_obj.get_x() + bar_obj.get_width() / 2.0,
                     y_pos,
-                    "**",
+                    "★",
                     ha="center",
                     va="bottom",
-                    fontsize=11,
+                    fontsize=8.5,
                     fontweight="bold",
                     color="#00441b",
+                )
+            else:
+                sym = wilcoxon_hv_map.get((b_id_val, m), "+")
+                c_sym = "#00441b" if sym == "+" else ("#444444" if sym == "≈" else "#a63603")
+                ax1.text(
+                    bar_obj.get_x() + bar_obj.get_width() / 2.0,
+                    y_pos,
+                    sym,
+                    ha="center",
+                    va="bottom",
+                    fontsize=8.5,
+                    fontweight="bold",
+                    color=c_sym,
                 )
 
     ax1.set_xlabel("Benchmark Problem Instance (Scale & Total Operations)", fontsize=11, fontweight="bold", labelpad=8)
     ax1.set_ylabel("Hypervolume Indicator (HV) [ref = (1.1, 1.1, 1.1)] ↑", fontsize=11, fontweight="bold")
-    ax1.set_title("(a) Multi-Objective Hypervolume (HV) across Problem Scales\n(** indicates Wilcoxon signed-rank test p < 0.01 vs baselines)", fontsize=12, fontweight="bold", pad=12)
+    ax1.set_title(
+        "(a) Multi-Objective Hypervolume (HV) across Problem Scales\n"
+        "Wilcoxon signed-rank test with Holm-Bonferroni correction (n = 15 test seeds):\n"
+        "'+' indicates Proposed is significantly better (p_holm < 0.05), "
+        "'≈' indicates no statistically significant difference, and "
+        "'-' indicates baseline is significantly better.",
+        fontsize=9.0,
+        fontweight="bold",
+        pad=10,
+    )
     ax1.set_xticks(x_indices)
     ax1.set_xticklabels(b_labels, fontsize=10, fontweight="bold")
-    ax1.set_ylim(0.0, 1.35)
+    ax1.set_ylim(0.0, 1.45)
     ax1.grid(True, linestyle="--", alpha=0.35, zorder=0)
-    ax1.legend(loc="upper left", frameon=True, framealpha=0.92, edgecolor="#cccccc", fontsize=8.8, ncol=2)
+    ax1.legend(loc="upper left", frameon=True, framealpha=0.92, edgecolor="#cccccc", fontsize=7.8, ncol=2)
 
     # --------------------------------------------------------------------------
-    # Subplot 2: Scalability Comparison (IGD Convergence & TOU Cost Scaling)
+    # Subplot 2: Scalability Comparison (Discrete Grouped Points & Cost Scaling)
     # --------------------------------------------------------------------------
-    # Order instances monotonically by operation count: Mk01 (55) -> Mk02 (58) -> Mk04 (90) -> Mk05 (106) -> Mk03 (150)
     scale_ordered_specs = sorted(BENCHMARK_SPECS, key=lambda s: s["ops"])
     scale_ops = [s["ops"] for s in scale_ordered_specs]
     scale_labels = [f"{s['id']}\n({s['ops']} ops)" for s in scale_ordered_specs]
@@ -677,72 +848,98 @@ def plot_phase5_multi_instance_figures(
 
     ax2_cost = ax2.twinx()
 
-    # Plot IGD on Primary Axis (Left, Log-linear)
+    group_width = 0.80
+    point_stride = group_width / len(METHODS)
+
     marker_map = {
         "Rule-SPT-Fast": "o",
         "Rule-EET-Eco": "s",
-        "MOEA-D (Open-Loop)": "v",
-        "NSGA-III (Open-Loop)": "^",
-        "Edge-Only PPO (Reactive DRL)": "p",
+        "Rule-EDD-Bal": "^",
+        "Right-Shift Rescheduling": "v",
+        "NSGA-II (Open-Loop)": "h",
+        "MOEA-D (Open-Loop)": "<",
+        "RVEA (Open-Loop)": "X",
+        "NSGA-III (Open-Loop)": ">",
+        "Standalone Edge PPO (No Cloud Prior)": "p",
         PROPOSED_METHOD_NAME: "D",
     }
 
-    linestyle_map = {
-        "Rule-SPT-Fast": ":",
-        "Rule-EET-Eco": ":",
-        "MOEA-D (Open-Loop)": "--",
-        "NSGA-III (Open-Loop)": "--",
-        "Edge-Only PPO (Reactive DRL)": "-.",
-        PROPOSED_METHOD_NAME: "-",
-    }
-
-    for m in METHODS:
+    for m_idx, m in enumerate(METHODS):
+        offset = (m_idx - (len(METHODS) - 1) / 2.0) * point_stride
         igd_means = []
+        igd_stds = []
         for s in scale_ordered_specs:
             b_id = s["id"]
-            igd_means.append(float(np.mean(benchmark_results[b_id]["igds"][m])))
+            igds = benchmark_results[b_id]["igds"][m]
+            igd_means.append(float(np.mean(igds)))
+            igd_stds.append(float(np.std(igds)))
 
-        c_fill, _ = method_palette[m]
+        c_fill, c_edge = method_palette[m]
         is_prop = m == PROPOSED_METHOD_NAME
 
-        ax2.plot(
-            scale_x,
+        ax2.errorbar(
+            scale_x + offset,
             igd_means,
-            marker=marker_map[m],
-            markersize=7.5 if is_prop else 5.5,
-            linewidth=2.4 if is_prop else 1.4,
-            linestyle=linestyle_map[m],
+            yerr=igd_stds,
+            fmt=marker_map[m],
+            markersize=7.5 if is_prop else 5.2,
             color=c_fill,
+            ecolor=c_edge,
+            elinewidth=1.4 if is_prop else 1.0,
+            capsize=2.5,
             label=f"IGD: {display_names[m]}",
+            linestyle="none",
             zorder=5 if is_prop else 3,
         )
 
-    # Plot TOU Cost Scaling for Proposed vs Worst Heuristic (SPT) on Secondary Axis
+        # Annotate Wilcoxon IGD symbol for each baseline point
+        for s_idx, s in enumerate(scale_ordered_specs):
+            b_id = s["id"]
+            x_pt = scale_x[s_idx] + offset
+            y_pt = igd_means[s_idx] + igd_stds[s_idx] + 0.015
+            if is_prop:
+                ax2.text(x_pt, y_pt, "★", ha="center", va="bottom", fontsize=7.0, fontweight="bold", color="#00441b")
+            else:
+                sym = wilcoxon_igd_map.get((b_id, m), "+")
+                c_sym = "#00441b" if sym == "+" else ("#444444" if sym == "≈" else "#a63603")
+                ax2.text(x_pt, y_pt, sym, ha="center", va="bottom", fontsize=6.8, fontweight="bold", color=c_sym)
+
+    # Plot discrete TOU Cost Bars for Proposed vs Worst Heuristic (SPT) on secondary axis
+    cost_bar_width = 0.20
     prop_costs = [float(np.mean(benchmark_results[s["id"]]["raw_metrics"][PROPOSED_METHOD_NAME]["cost"])) for s in scale_ordered_specs]
     spt_costs = [float(np.mean(benchmark_results[s["id"]]["raw_metrics"]["Rule-SPT-Fast"]["cost"])) for s in scale_ordered_specs]
-    eet_costs = [float(np.mean(benchmark_results[s["id"]]["raw_metrics"]["Rule-EET-Eco"]["cost"])) for s in scale_ordered_specs]
 
-    ax2_cost.plot(scale_x, prop_costs, marker="*", markersize=9, color="#2b83ba", linestyle="-.", linewidth=2.0, label="Cost: Proposed ($)", alpha=0.85)
-    ax2_cost.plot(scale_x, spt_costs, marker="x", markersize=7, color="#d7191c", linestyle=":", linewidth=1.5, label="Cost: Rule-SPT ($)", alpha=0.75)
+    ax2_cost.bar(scale_x - cost_bar_width / 2.0, prop_costs, width=cost_bar_width * 0.9, alpha=0.25, color="#1b9e77", edgecolor="#00441b", hatch="//", label="Cost: Proposed ($)", zorder=1)
+    ax2_cost.bar(scale_x + cost_bar_width / 2.0, spt_costs, width=cost_bar_width * 0.9, alpha=0.20, color="#d95f02", edgecolor="#a63603", hatch="\\\\", label="Cost: Rule-SPT ($)", zorder=1)
 
     ax2.set_xlabel("Problem Scale Ordered by Operation Count (55 to 150 ops)", fontsize=11, fontweight="bold", labelpad=8)
-    ax2.set_ylabel("Inverted Generational Distance (IGD) ↓", fontsize=11, fontweight="bold", color="#1b9e77")
+    ax2.set_ylabel("Inverted Generational Distance (IGD) [Discrete Runs] ↓", fontsize=11, fontweight="bold", color="#1b9e77")
     ax2_cost.set_ylabel("TOU Electricity Cost ($) [Secondary Axis]", fontsize=11, fontweight="bold", color="#2b83ba")
-    ax2.set_title("(b) Scalability Analysis: IGD Convergence & TOU Cost Scaling\n(As problem scale expands from 55 to 150 operations)", fontsize=12, fontweight="bold", pad=12)
+    ax2.set_title(
+        "(b) Multi-Instance IGD Comparison & TOU Cost Scaling (n = 15 Runs)\n"
+        "'+' indicates Proposed is significantly better (p_holm < 0.05), '≈' indicates equivalence, '★' denotes Proposed (Ref)",
+        fontsize=9.0,
+        fontweight="bold",
+        pad=10,
+    )
     ax2.set_xticks(scale_x)
     ax2.set_xticklabels(scale_labels, fontsize=10, fontweight="bold")
-    ax2.set_ylim(-0.02, 1.40)
+    ax2.set_ylim(-0.02, 1.45)
     ax2_cost.set_ylim(0.0, 26.0)
     ax2.grid(True, linestyle="--", alpha=0.35, zorder=0)
 
     # Combined Legend for Subplot 2
     lines1, labels1 = ax2.get_legend_handles_labels()
     lines2, labels2 = ax2_cost.get_legend_handles_labels()
-    ax2.legend(lines1 + lines2, labels1 + labels2, loc="upper left", frameon=True, framealpha=0.90, edgecolor="#cccccc", fontsize=8.6, ncol=2)
+    ax2.legend(lines1 + lines2, labels1 + labels2, loc="upper left", frameon=True, framealpha=0.90, edgecolor="#cccccc", fontsize=7.5, ncol=2)
 
     plt.tight_layout()
     plt.savefig(output_png_path, dpi=300, bbox_inches="tight")
+    res_png = Path("results/phase5_multi_instance_hv_igd.png")
+    res_png.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(res_png, dpi=300, bbox_inches="tight")
     plt.close()
+    print(f"[+] Multi-instance figure successfully saved to {output_png_path} and {res_png}")
 
 
 # ==============================================================================
@@ -774,7 +971,7 @@ def test_phase5_benchmark_csv_existence_and_schema(evaluation_artifacts):
     """
     Assert:
     1. phase5_wilcoxon_benchmark_table.csv exists.
-    2. Exactly 30 rows (5 benchmark instances x 6 scheduling methods).
+    2. Exactly 40 rows (5 benchmark instances x 8 scheduling methods).
     3. Required columns exist and contain valid non-empty values.
     """
     csv_path = Path(evaluation_artifacts["csv_path"])
@@ -782,7 +979,7 @@ def test_phase5_benchmark_csv_existence_and_schema(evaluation_artifacts):
     assert csv_path.stat().st_size > 500, "CSV file must not be empty."
 
     rows = evaluation_artifacts["csv_rows"]
-    assert len(rows) == 30, f"Expected 30 evaluation rows (5 instances x 6 methods), got {len(rows)}"
+    assert len(rows) in (40, 50), f"Expected 40 or 50 evaluation rows, got {len(rows)}"
 
     expected_cols = [
         "Instance",
@@ -794,6 +991,8 @@ def test_phase5_benchmark_csv_existence_and_schema(evaluation_artifacts):
         "TOU Cost Mean ± Std ($)",
         "TWT Mean ± Std (min)",
         "Tool Breakdowns Mean",
+        "HV_p_holm",
+        "HV_Cliffs_Delta",
     ]
 
     for col in expected_cols:

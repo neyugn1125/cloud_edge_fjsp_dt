@@ -87,9 +87,9 @@ def test_break_even_time_calculation(system_config: SystemConfig):
 
 
 def test_tou_pricing_cycle(system_config: SystemConfig):
-    """Test TOU tariff cycle lookup and periodicity."""
+    """Test TOU tariff cycle lookup and periodicity (100-min repeating cycle)."""
     tou = system_config.tou_pricing
-    assert tou.cycle_min == 1440.0
+    assert tou.cycle_min == 100.0
 
     # Test rate at 10 min -> Off-peak (0.06)
     assert system_config.get_tou_rate(10.0) == 0.06
@@ -97,10 +97,10 @@ def test_tou_pricing_cycle(system_config: SystemConfig):
     assert system_config.get_tou_rate(40.0) == 0.20
     # Test rate at 80 min -> Mid-peak (0.12)
     assert system_config.get_tou_rate(80.0) == 0.12
-    # Test rate at 150 min -> On-peak (0.20)
-    assert system_config.get_tou_rate(150.0) == 0.20
-    # Test multi-day periodicity (Day 2 at 40 min = 1440 + 40 = 1480 min)
-    assert system_config.get_tou_rate(1480.0) == 0.20
+    # Test periodic repetition:
+    assert system_config.get_tou_rate(110.0) == 0.06
+    assert system_config.get_tou_rate(140.0) == 0.20
+    assert system_config.get_tou_rate(180.0) == 0.12
 
 
 def test_machine_telemetry_payload_validation():

@@ -30,6 +30,23 @@ from sim_env.physical_machine import CNCPhysicalTwin, OperationExecutionResult
 from utils.mqtt_schemas import MachineConfig, MachineState, SystemConfig, load_system_config
 
 
+def get_tou_rate(time_min: float) -> float:
+    """
+    Get electricity tariff ($/kWh) for any simulation time in minutes
+    according to the repeating 100-min cyclic TOU schedule:
+      - [0.0, 25.0): Off-Peak ($0.06/kWh)
+      - [25.0, 60.0): On-Peak ($0.20/kWh)
+      - [60.0, 100.0): Mid-Peak ($0.12/kWh)
+    """
+    t_cycle = time_min % 100.0
+    if t_cycle < 25.0:
+        return 0.06
+    elif t_cycle < 60.0:
+        return 0.20
+    else:
+        return 0.12
+
+
 class GreenFJSPEnv(gym.Env):
     """
     Gymnasium environment for Energy-Aware Dynamic FJSP with Speed Scaling
@@ -49,6 +66,7 @@ class GreenFJSPEnv(gym.Env):
         p_penalty_factor: Optional[float] = None,
         breakdown_penalty: float = 10.0,
         domain_randomization: bool = False,
+        transport_time_min: float = 0.0,
         seed: Optional[int] = None,
     ) -> None:
         """
@@ -64,6 +82,7 @@ class GreenFJSPEnv(gym.Env):
             p_penalty_factor: Backwards compatibility alias for lambda_peak.
             breakdown_penalty: Fixed penalty on tool breakdown event (default 10.0).
             domain_randomization: Whether to perturb initial wear and eta on reset.
+            transport_time_min: Transfer / setup latency (min) between different machines.
             seed: Optional random seed.
         """
         super().__init__()
@@ -168,8 +187,10 @@ class GreenFJSPEnv(gym.Env):
             )
 
         # Dynamic simulation tracking attributes
+        self.transport_time_min: float = float(transport_time_min)
         self.current_op_idx: List[int] = [0] * self.num_jobs
         self.job_ready_time: List[float] = [0.0] * self.num_jobs
+        self.job_last_machine: List[Optional[str]] = [None] * self.num_jobs
         self.job_completed: List[bool] = [False] * self.num_jobs
         self.cmax: float = 0.0
         self.total_cost: float = 0.0
@@ -184,6 +205,10 @@ class GreenFJSPEnv(gym.Env):
 
         if seed is not None:
             self.reset(seed=seed)
+
+    def get_tou_rate(self, time_min: float) -> float:
+        """Get electricity tariff ($/kWh) at simulation minute."""
+        return get_tou_rate(time_min)
 
     def set_objective_weights(self, weights: Tuple[float, float, float]) -> None:
         """Update objective weights from Cloud layer (w_cmax, w_energy, w_tardiness)."""
@@ -268,23 +293,29 @@ class GreenFJSPEnv(gym.Env):
                 alt = next(a_item for a_item in op_info["eligible_machines"] if a_item["machine_id"] == m_id)
                 est_wear_inc = twin.base_eta * float(alt["t_base_min"])
 
-                # PM is strictly permitted when current wear is in degradation: >= 78% w_max (or >= 75% in cloud-guided mode)
-                # OR when the upcoming operation's cutting increment would push tool wear near failure (>= 95% w_max)
+                # Pre-Operation Predictive PM check (safety threshold: 85.0 um, w_max: 100.0 um):
+                # When current wear is >= 78% w_max (or >= 75% in cloud-guided mode)
+                # OR when cutting would push wear >= 85.0 um: allow proactive PM prior to operation.
                 pm_threshold = 0.75 if self.cloud_guided_mask else 0.78
-                can_pm = (wear >= pm_threshold * w_max) or (wear + 1.35 * est_wear_inc >= 0.95 * w_max)
+                can_pm = (wear >= pm_threshold * w_max) or (wear + 1.25 * est_wear_inc >= 85.0)
 
                 # Critical wear protection (active in cloud-guided mode):
-                # If wear >= 88% w_max, high cutting speed s=3 is locked (pm_flag=0)
-                # If wear >= 92% w_max or the cut would cause breakdown, PM is mandatory (pm_flag=0 is locked)
                 is_critical_wear = (wear >= 0.88 * w_max) and self.cloud_guided_mask
                 is_extreme_wear = ((wear >= 0.92 * w_max) or (wear + 1.25 * est_wear_inc >= 0.98 * w_max)) and self.cloud_guided_mask
 
                 for speed_level in range(1, self.num_speed_levels + 1):
+                    v_s = self.system_config.speed_scaling.levels[speed_level].speed_factor
+                    est_wear_inc_s = twin.base_eta * (v_s ** (twin.beta - 1)) * float(alt["t_base_min"])
+                    wear_exceeds_85 = (wear + 1.25 * est_wear_inc_s >= 85.0) and self.cloud_guided_mask
+
                     # Normal cutting (pm_flag = 0)
                     if not is_extreme_wear:
                         if not (is_critical_wear and speed_level == 3):
-                            act_no_pm = self.encode_action(job_idx, m_idx, speed_level, 0)
-                            mask[act_no_pm] = True
+                            # Predictive speed derating: if speed s pushes wear >= 85.0 um, derate to s=1 if s=1 stays safe
+                            if not (wear_exceeds_85 and speed_level > 1 and (wear + 1.25 * est_wear_inc < 85.0)):
+                                if not (wear >= 85.0 and self.cloud_guided_mask):
+                                    act_no_pm = self.encode_action(job_idx, m_idx, speed_level, 0)
+                                    mask[act_no_pm] = True
 
                     # Opportunistic PM (pm_flag = 1)
                     if can_pm:
@@ -338,6 +369,7 @@ class GreenFJSPEnv(gym.Env):
         # Reset Job tracking progress
         self.current_op_idx = [0] * self.num_jobs
         self.job_ready_time = [0.0] * self.num_jobs
+        self.job_last_machine = [None] * self.num_jobs
         self.job_completed = [False] * self.num_jobs
 
         self.cmax = 0.0
@@ -383,8 +415,12 @@ class GreenFJSPEnv(gym.Env):
 
         t_base_min = float(alt["t_base_min"])
 
-        # 1. Determine Earliest Start Time
+        # 1. Determine Earliest Start Time (incorporating transfer/setup latency if machine changes)
         job_ready = self.job_ready_time[job_idx]
+        prev_mach = self.job_last_machine[job_idx]
+        if prev_mach is not None and prev_mach != m_id and self.transport_time_min > 0.0:
+            job_ready += self.transport_time_min
+
         mach_ready = machine.available_time
         start_time = max(job_ready, mach_ready)
 
@@ -422,6 +458,7 @@ class GreenFJSPEnv(gym.Env):
 
         end_time = machine.available_time
         self.job_ready_time[job_idx] = end_time
+        self.job_last_machine[job_idx] = m_id
         self.current_op_idx[job_idx] += 1
         self.completed_operations += 1
 

@@ -34,38 +34,31 @@ speed_scaling:
       description: "High cutting speed"
 
 # Time-of-Use (TOU) Electricity Pricing
-# Scaled to the benchmark production shift horizon:
+# Repeating 100-minute cycle across multi-shift production horizons:
 #   - [0, 25) min   : Off-Peak ($0.06/kWh)
 #   - [25, 60) min  : On-Peak  ($0.20/kWh)
 #   - [60, 100) min : Mid-Peak ($0.12/kWh)
-#   - [100, 1440) min: On-Peak ($0.20/kWh)
 tou_pricing:
-  cycle_min: 1440.0
+  cycle_min: 100.0
   tiers:
-    - name: "off_peak_1"
+    - name: "off_peak"
       tier_type: "off_peak"
-      start_min: 0.0      # 00:00
+      start_min: 0.0      # 0 min
       end_min: 25.0       # 25 min
       rate_per_kwh: 0.06
-      description: "Early shift off-peak window"
-    - name: "on_peak_1"
+      description: "Low-demand off-peak window"
+    - name: "on_peak"
       tier_type: "peak"
       start_min: 25.0     # 25 min
       end_min: 60.0       # 60 min
       rate_per_kwh: 0.20
-      description: "Mid-shift high-demand on-peak window"
-    - name: "mid_peak_1"
+      description: "High-demand on-peak window"
+    - name: "mid_peak"
       tier_type: "mid_peak"
       start_min: 60.0     # 60 min
       end_min: 100.0      # 100 min
       rate_per_kwh: 0.12
       description: "Regular production mid-peak window"
-    - name: "on_peak_2"
-      tier_type: "peak"
-      start_min: 100.0    # 100 min
-      end_min: 1440.0     # 24:00
-      rate_per_kwh: 0.20
-      description: "Extended on-peak window"
 
 # Physical Parameters for CNC Machines M1 to M6
 # Initial tool wear simulates partially worn tools carried over from previous shift:
