@@ -67,7 +67,7 @@ Sự sụt giảm chi phí năng lượng TOU ấn tượng này xuất phát t�
   1. Đẩy tốc độ cắt lên $s=3$ ($v_3 = 1.50$) trong 4 cửa sổ Off-Peak $[0..25], [100..125], [200..225], [300..325]$ khi độ mòn dao còn an toàn ($w < 65\,\mu\text{m}$), tận dụng giá điện siêu rẻ (\$0.06).
   2. Chủ động hạ tốc độ xuống $s=1$ ($v_1 = 1.00$) hoặc thực hiện bảo trì phòng ngừa (PM) trong các cửa sổ On-Peak $[25..60], [125..160], [225..260], [325..360]$ để triệt tiêu phụ thu giá đỉnh (\$0.20).
 - **Vì sao Makespan gần như không đổi?**
-  Tổng khối lượng công việc cắt gọt (số lượng nguyên công và chiều dài chạy dao danh định) của bài toán là bất biến. Khi tác tử phân bổ lại tốc độ: tăng tốc ở cửa sổ này và hạ tốc ở cửa sổ khác một cách đối xứng theo chu kỳ 100 phút, tổng thời gian hoàn thành toàn ca (Makespan) được bảo toàn ở mức tối ưu Pareto ($\sim 401.9\text{ phút}$ trên Mk03, $\sim 390.0\text{ phút}$ trên Mk05), nhưng toàn bộ trọng tâm tiêu thụ điện năng được dịch chuyển khỏi khung giờ cao điểm, giảm chi phí ròng từ $\$18.862$ xuống $\$13.444$ (~29% trên Mk03).
+  Tổng khối lượng công việc cắt gọt (số lượng nguyên công và chiều dài chạy dao danh định) của bài toán là bất biến. Khi tác tử phân bổ lại tốc độ: tăng tốc ở cửa sổ này và hạ tốc ở cửa sổ khác một cách đối xứng theo chu kỳ 100 phút, tổng thời gian hoàn thành toàn ca (Makespan) được bảo toàn ở mức tối ưu Pareto ($\sim 462.7\text{ phút}$ trên Mk03, $\sim 408.8\text{ phút}$ trên Mk05), nhưng toàn bộ trọng tâm tiêu thụ điện năng được dịch chuyển khỏi khung giờ cao điểm, giảm chi phí ròng từ $\$20.106$ xuống $\$13.883$ (30.95% trên Mk03).
 
 ---
 
@@ -149,40 +149,43 @@ Với $\lambda_{\text{peak}} = \$0.30 / \text{kWh}$.
 
 ### 3.1 Công Thức Tính Chỉ Số Lệch Tích Lũy Chuẩn Hóa Toàn Ca (Shift-Normalized CDI)
 
-Được định nghĩa trong [`utils/eval_protocol.py`](file:///home/neyugn/Documents/cloud_edge_fjsp_dt/utils/eval_protocol.py#L96-L135) (`compute_normalized_cdi`):
+Được định nghĩa trong [`utils/eval_protocol.py`](file:///home/neyugn/Documents/cloud_edge_fjsp_dt/utils/eval_protocol.py#L96-L135) (`compute_normalized_cdi`) và triển khai chi tiết theo từng instance trong [`tests/test_task5_2_multi_instance_eval.py`](file:///home/neyugn/Documents/cloud_edge_fjsp_dt/tests/test_task5_2_multi_instance_eval.py#L220-L260):
 
 $$CDI(t) = \alpha \cdot \frac{|C_{\text{actual}}(t) - C_{\text{base}}(t)|}{C_{\text{base\_total}}} + (1.0 - \alpha) \cdot \frac{|E_{\text{actual}}(t) - E_{\text{base}}(t)|}{E_{\text{base\_total}}}$$
 
 Trong đó:
 - $C_{\text{actual}}(t)$: Thời điểm hoàn thành lũy kế thực tế của hệ thống tính đến nguyên công tại mốc thời gian $t$ (phút).
 - $C_{\text{base}}(t)$: Mốc thời gian hoàn thành theo kế hoạch tối ưu của Cloud tính đến nguyên công đó (phút).
-- $C_{\text{base\_total}}$: **Tổng Makespan danh định của toàn bộ kế hoạch ca sản xuất** (phút).
+- $C_{\text{base\_total}}$: **Tổng Makespan danh định của toàn bộ kế hoạch ca sản xuất** (phút), được tính động qua `cmax_nominal = max(op.end_time)` từ lịch cơ sở `cloud_ops` của từng instance (`Mk01`–`Mk05`) và từng seed độc lập.
 - $E_{\text{actual}}(t)$: Tổng điện năng lũy kế thực tế đã tiêu thụ đến thời điểm $t$ (kWh).
 - $E_{\text{base}}(t)$: Tổng điện năng kế hoạch của Cloud đến thời điểm $t$ (kWh).
-- $E_{\text{base\_total}}$: **Tổng điện năng danh định dự kiến cho toàn bộ ca sản xuất** (kWh).
+- $E_{\text{base\_total}}$: **Tổng điện năng danh định dự kiến cho toàn bộ ca sản xuất** (kWh), được tính động từ chính thông số máy trong `env.machines` qua $E_{\text{base\_total}} = \sum_{op} E_{\text{planned}, op}$ (năng lượng cắt theo cấp tốc độ danh định $s$ kết hợp năng lượng chờ/standby dự kiến).
 - $\alpha = 0.5$: Trọng số cân bằng giữa độ lệch tiến độ thời gian và độ lệch tiêu hao năng lượng.
 
-> **Ý nghĩa chuẩn hóa toàn ca:** Việc chia cho tổng lượng toàn ca ($C_{\text{base\_total}}, E_{\text{base\_total}}$) thay vì tiến độ tức thời $C_{\text{base}}(t)$ loại bỏ hoàn toàn lỗi kỳ dị chia cho 0 khi mới bắt đầu ca ($t \to 0, C_{\text{base}}(t) \to 0$), đảm bảo $CDI(t)$ luôn nằm trong khoảng toán học chặt $[0.0, 1.0]$.
+> **Ý nghĩa chuẩn hóa toàn ca:** Việc chia cho tổng lượng toàn ca ($C_{\text{base\_total}}, E_{\text{base\_total}}$) thay vì tiến độ tức thời $C_{\text{base}}(t)$ loại bỏ hoàn toàn lỗi kỳ dị chia cho 0 khi mới bắt đầu ca ($t \to 0, C_{\text{base}}(t) \to 0$), đảm bảo $CDI(t)$ luôn nằm trong khoảng toán học chặt $[0.0, 1.0]$. Đồng thời, việc tính toán động theo từng bài toán giúp hệ thống thích ứng chính xác với mọi quy mô từ nhỏ (`Mk01`: $\sim 20\,\text{kWh}$) đến rất lớn (`Mk03`: $\sim 105\,\text{kWh}$).
 
 ### 3.2 Điều Kiện Kích Hoạt Đồng Bộ Lên Cloud
-Tại mỗi bước thực hiện nguyên công $i$, sau khi cập nhật sai số:
-$$\text{Nếu } CDI(t) > \theta_{\text{th}} \quad \Longrightarrow \quad \text{Phát tín hiệu MQTT \texttt{dt/fjsp/edge/trigger\_reschedule} yêu cầu Cloud tái lập lịch}$$
+Tại mỗi bước thực hiện nguyên công $k$, sau khi cập nhật sai số:
+$$\text{Nếu } CDI(k) > \theta_{\text{th}} \quad \Longrightarrow \quad \text{Phát tín hiệu MQTT \texttt{dt/fjsp/edge/trigger\_reschedule} yêu cầu Cloud tái lập lịch}$$
 
 Lưới khảo sát độ nhạy ngưỡng $\theta_{\text{th}}$ gồm 10 mốc:
 $$\theta_{\text{th}} \in [0.02, 0.05, 0.08, 0.10, 0.12, 0.15, 0.18, 0.22, 0.35, 0.50]$$
 - Ngưỡng tối ưu Pareto được chọn: **$\theta_{\text{th}} = 0.12$** (Điểm gối - Knee Point).
 
-### 3.3 Cơ Chế Reset Điểm Neo (Anchor Reset Mechanism)
-Trong [`tests/test_task4_3_full_hil.py`](file:///home/neyugn/Documents/cloud_edge_fjsp_dt/tests/test_task4_3_full_hil.py#L188-L198):
-Ngay khi điều kiện $CDI(t) > \theta_{\text{th}}$ được thỏa mãn:
-1. Bộ đếm cuộc gọi Cloud tăng lên: `cloud_calls += 1`.
-2. Điểm neo mới được gán tại nguyên công hiện tại: `anchor_idx = i`.
-3. Độ trễ thời gian dồn tích và phụ phụ năng lượng dồn tích được triệt tiêu:
-   $$\text{accum\_halt} = 0.0, \quad \text{accum\_extra\_e} = 0.0$$
-4. Ở các bước tiếp theo $i+1$, quỹ đạo cơ sở của Cloud được tính tương đối từ điểm neo mới:
-   $$C_{\text{base\_seg}} = C_{\text{base}}[i] - C_{\text{base}}[\text{anchor\_idx}]$$
-   $$E_{\text{base\_seg}} = E_{\text{base}}[i] - E_{\text{base}}[\text{anchor\_idx}]$$
-   Do đó, ngay sau thời điểm đồng bộ, sai lệch được xóa về 0: $CDI(t^+) \to 0$, thiết lập lại mốc so sánh sạch cho giai đoạn tiếp theo.
+### 3.3 Cơ Chế Đánh Giá Tương Đối & Reset Điểm Neo (Relative Re-anchoring Mechanism)
+Để khắc phục triệt để hiện tượng kẹt kích hoạt liên tục (chatter re-triggering) sau một biến cố lớn giữa ca, hệ thống áp dụng cơ chế đánh giá gia số tương đối so với mốc đồng bộ gần nhất (`anchor_op_idx`):
+
+Tại bước $k$ sau điểm neo $\text{anchor}$:
+$$\Delta C_{\text{dev}} = \frac{|(C_{\text{act}}(k) - C_{\text{act}}(\text{anchor})) - (C_{\text{plan}}(k) - C_{\text{plan}}(\text{anchor}))|}{C_{\text{base\_total}}}$$
+$$\Delta E_{\text{dev}} = \frac{|(E_{\text{act}}(k) - E_{\text{act}}(\text{anchor})) - (E_{\text{plan}}(k) - E_{\text{plan}}(\text{anchor}))|}{E_{\text{base\_total}}}$$
+$$CDI(k) = \alpha \cdot \Delta C_{\text{dev}} + (1 - \alpha) \cdot \Delta E_{\text{dev}}$$
+
+Ngay khi điều kiện $CDI(k) > \theta_{\text{th}}$ được thỏa mãn:
+1. **Ghi nhận cuộc gọi:** Bộ đếm cuộc gọi Cloud tăng lên: `cloud_calls += 1`.
+2. **Thiết lập lại điểm neo:** Cập nhật `anchor_op_idx = k`, `c_act_anchor = C_{\text{act}}(k)`, `e_act_anchor = E_{\text{act}}(k)`.
+3. **Triệt tiêu sai lệch tức thời:** Gia số sai lệch ngay sau tái đồng bộ được đưa về 0: $CDI(k^+) \to 0.0$, thiết lập mốc so sánh sạch cho các bước tiếp theo.
+4. **Tái lập lịch bảo toàn phân bổ Pareto (Preserving NSGA-III Allocation):**  
+   Hàm `trigger_fast_cloud_reschedule(env, cloud_ops)` giữ nguyên tuyệt đối thứ tự gia công và phân bổ máy tối ưu của NSGA-III đối với các nguyên công chưa bị trễ; chỉ tái định tuyến sang máy rảnh sớm nhất cho các nguyên công bị nghẽn do máy dừng bảo dưỡng hoặc trôi tiến độ nghiêm trọng, kết hợp điều chỉnh cấp tốc độ cắt phù hợp với khung giá điện TOU hiện hành.
 
 ---
 
@@ -253,7 +256,7 @@ Trong đó: $j \in [0..9]$, $m \in [0..5]$, $s \in \{1, 2, 3\}$, $pm \in \{0, 1\
 
 #### Vì sao kết quả của `Standalone Edge PPO` thay đổi giữa các bài toán (Mk01: 110.42 min, Mk05: 344.81 min)?
 Trong [`tests/test_task5_2_multi_instance_eval.py`](file:///home/neyugn/Documents/cloud_edge_fjsp_dt/tests/test_task5_2_multi_instance_eval.py#L131-L153):
-1. **Trên bài toán $10 \times 6$ (`Mk01`, `Mk02`):** Mô hình ONNX được xuất từ `best_maskable_ppo.zip` sử dụng cơ chế cửa sổ ứng viên bất biến quy mô (Top-$K$ Candidate Jobs $K=10$, Top-$M_{\text{cand}}$ Eligible Machines $M=6$). Khi chạy không có Cloud Guidance (`cloud_guided_mask=False`), tác tử hoàn toàn tự trị tại biên nhưng thiếu quy hoạch phân bổ vĩ mô toàn cục, dẫn đến Makespan tăng lên $110.42 \pm 3.77\text{ phút}$ (so với $86.11 \pm 9.30\text{ phút}$ của Proposed).
+1. **Trên bài toán $10 \times 6$ (`Mk01`, `Mk02`):** Mô hình ONNX được xuất từ `best_maskable_ppo.zip` sử dụng cơ chế cửa sổ ứng viên bất biến quy mô (Top-$K$ Candidate Jobs $K=10$, Top-$M_{\text{cand}}$ Eligible Machines $M=6$). Khi chạy không có Cloud Guidance (`cloud_guided_mask=False`), tác tử hoàn toàn tự trị tại biên nhưng thiếu quy hoạch phân bổ vĩ mô toàn cục, dẫn đến Makespan tăng lên $110.42 \pm 3.77\text{ phút}$ (so với $86.00 \pm 9.79\text{ phút}$ của Proposed).
 2. **Trên bài toán lớn (`Mk03`, `Mk04`, `Mk05`):** Cơ chế quan sát bất biến quy mô ánh xạ các bài toán nhiều job và máy vào không gian 87 chiều và 360 hành động cố định, giúp mạng ONNX thực thi trơn tru mà không cần chỉnh sửa kích thước mạng.
 3. **Sự khác biệt Makespan giữa Mk01 (110.42 min) và Mk05 (344.81 min):**
    `Mk05` có quy mô cực kỳ thắt nút cổ chai: **$15$ jobs với $106$ nguyên công nhưng chỉ có đúng $4$ máy CNC** (tỷ lệ $26.5\text{ ops/máy}$, so với chỉ $9.17\text{ ops/máy}$ ở Mk01). Tổng thời gian gia công vật lý tối thiểu trên một máy của Mk05 đã vượt quá $300\text{ phút}$. Do đó Makespan $344.81\text{ phút}$ phản ánh đúng quy mô vật lý của bài toán thắt nút cổ chai chứ không phải do sai số ngẫu nhiên.
@@ -280,7 +283,7 @@ Trong [`tests/test_task5_2_multi_instance_eval.py`](file:///home/neyugn/Document
 
 ### 5.2 Chuẩn Hóa Min-Max, Tọa Độ Điểm Tham Chiếu HV và Tập Pareto Chuẩn P* Cho IGD
 Trong [`tests/test_task5_2_multi_instance_eval.py`](file:///home/neyugn/Documents/cloud_edge_fjsp_dt/tests/test_task5_2_multi_instance_eval.py#L496-L536):
-1. **Tập điểm quan sát gộp:** Trên mỗi bài toán, toàn bộ kết quả của 8 phương pháp $\times$ 15 hạt giống test ($120$ điểm đánh giá trong không gian $(C_{\max}, \text{Cost}, \text{TWT})$) được gom lại thành ma trận $A_{120 \times 3}$.
+1. **Tập điểm quan sát gộp:** Trên mỗi bài toán, toàn bộ kết quả của 10 phương pháp $\times$ 15 hạt giống test ($150$ điểm đánh giá trong không gian $(C_{\max}, \text{Cost}, \text{TWT})$) được gom lại thành ma trận $A_{150 \times 3}$.
 2. **Điểm Lý tưởng (Ideal Point $z^*$) và Điểm Nadir ($z^{\text{nad}}$):**
    $$z^* = \min(A, \text{axis}=0), \quad z^{\text{nad}} = \max(A, \text{axis}=0)$$
 3. **Công thức chuẩn hóa Min-Max:**
@@ -289,32 +292,32 @@ Trong [`tests/test_task5_2_multi_instance_eval.py`](file:///home/neyugn/Document
    $$\mathbf{r}_{\text{ref}} = (1.1, 1.1, 1.1)$$
    Do các giải pháp đều thuộc $[0.0, 1.0]^3$, điểm $(1.1, 1.1, 1.1)$ đảm bảo bao phủ hoàn toàn mọi nghiệm không bị chi phối và gán giá trị HV dương hợp lệ.
 5. **Xây dựng Tập Pareto Tham Chiếu $P^*$ (Empirical True Pareto Front) tính IGD:**
-   Toàn bộ 120 điểm chuẩn hóa được lọc bằng thuật toán không bị chi phối (Pareto Dominance filter): nghiệm $c$ được đưa vào $P^*$ nếu không tồn tại bất kỳ nghiệm $x$ nào thỏa mãn $x_k \le c_k, \forall k$ và có ít nhất một mục tiêu $x_j < c_j$.
+   Toàn bộ 150 điểm chuẩn hóa được lọc bằng thuật toán không bị chi phối (Pareto Dominance filter): nghiệm $c$ được đưa vào $P^*$ nếu không tồn tại bất kỳ nghiệm $x$ nào thỏa mãn $x_k \le c_k, \forall k$ và có ít nhất một mục tiêu $x_j < c_j$.
    Chỉ số IGD đo khoảng cách bình quân từ các điểm thuộc $P^*$ đến nghiệm của thuật toán:
    $$IGD(A, P^*) = \frac{1}{|P^*|} \sum_{v \in P^*} \min_{a \in A} \|v - a\|_2$$
 
-### 5.3 Giải Mã Nghịch Lý Thống Kê Trên Mk05: Vì Sao Right-Shift Đạt HV Cao Hơn (0.5406 vs 0.3722) Nhưng Proposed Lại Đạt Nghiệm Thực Tế Cân Bằng Và 0.00 Gãy Dao?
+### 5.3 Giải Mã Nghịch Lý Thống Kê Trên Mk05: Vì Sao Right-Shift Đạt HV Cao Hơn (0.5406 vs 0.4188) Nhưng Proposed Lại Đạt Nghiệm Thực Tế Cân Bằng Và 0.00 Gãy Dao?
 
 Dữ liệu thực nghiệm thực tế trên `Mk05` (15 test seeds):
 - **Right-Shift Rescheduling:**
   $\text{Makespan} = 370.30 \pm 28.80\text{ min}$, $\text{TOU Cost} = \$12.343 \pm 0.783$, $\text{TWT} = 4671.8 \pm 761.3\text{ min}$, $\text{Breakdowns} = 0.07$.
-  $\mathbf{HV = 0.5406 \pm 0.1007}, \quad \mathbf{IGD = 0.3378 \pm 0.0356}$.
+  $\mathbf{HV = 0.5406 \pm 0.1007}, \quad \mathbf{IGD = 0.3302 \pm 0.0283}$.
 - **Proposed Cloud-Edge DT:**
-  $\text{Makespan} = 455.13 \pm 27.77\text{ min}$, $\text{TOU Cost} = \mathbf{\$12.023 \pm 0.259}$, $\text{TWT} = \mathbf{4215.1 \pm 641.4\text{ min}}$, $\text{Breakdowns} = \mathbf{0.00}$.
-  $\mathbf{HV = 0.3722 \pm 0.1109}, \quad \mathbf{IGD = 0.3973 \pm 0.0788}$.
+  $\text{Makespan} = 408.76 \pm 29.48\text{ min}$, $\text{TOU Cost} = \mathbf{\$11.198 \pm 0.539}$, $\text{TWT} = 5395.5 \pm 800.5\text{ min}$, $\text{Breakdowns} = \mathbf{0.00}$.
+  $\mathbf{HV = 0.4188 \pm 0.1046}, \quad \mathbf{IGD = 0.3619 \pm 0.0715}$.
 
 #### Phân Tích Hình Học & Bản Chất Toán Học:
 1. **Bản chất của Hypervolume (HV):**
    HV đo thể tích hình hộp đa chiều giới hạn bởi điểm nghiệm và điểm tham chiếu $(1.1, 1.1, 1.1)$:
    $$HV \approx (1.1 - c_{\text{norm}}) \times (1.1 - \text{cost}_{\text{norm}}) \times (1.1 - \text{twt}_{\text{norm}})$$
-   - Phương pháp `Right-Shift` đạt được Makespan ngắn hơn ($370.3\text{ min}$ so với $455.1\text{ min}$) do nó **hoàn toàn bỏ qua quy trình bảo dưỡng phòng ngừa chủ động theo TOU** (chỉ có 0.07 lần thay dao trong toàn ca). Việc không dừng máy thay dao giúp Right-Shift ép các chi tiết vào gia công liên tục, kéo điểm chuẩn hóa $c_{\text{norm}}$ về gần 0 hơn, làm tăng thể tích bao bọc HV.
+   - Phương pháp `Right-Shift` đạt được Makespan ngắn hơn ($370.3\text{ min}$ so với $408.8\text{ min}$) do nó **hoàn toàn bỏ qua quy trình bảo dưỡng phòng ngừa chủ động theo TOU** (chỉ có 0.07 lần thay dao trong toàn ca). Việc không dừng máy thay dao giúp Right-Shift ép các chi tiết vào gia công liên tục, kéo điểm chuẩn hóa $c_{\text{norm}}$ về gần 0 hơn, làm tăng thể tích bao bọc HV.
 2. **Bản chất của Tính Cân Bằng & Bảo Trì Thực Tế:**
    - `Proposed Cloud-Edge DT` hạ tốc độ cắt về $s=1$ hoặc chủ động dừng máy thực hiện PM trong giờ cao điểm TOU để triệt tiêu phụ thu giá đỉnh. Điều này kéo dài Makespan danh định nhưng mang lại lợi ích kinh tế và vận hành to lớn:
-     * **Chi phí điện TOU thấp nhất toàn bộ benchmark:** $\$12.023 \pm 0.259$ (thấp hơn $\$12.343$ của Right-Shift, $\$12.697$ của NSGA-III, và $\$19.270$ của SPT).
-     * **Độ trễ công việc (TWT) thấp hơn Right-Shift:** $4215.1\,\text{min}$ so với $4671.8\,\text{min}$ (-9.8% trễ hạn).
+     * **Chi phí điện TOU thấp nhất toàn bộ benchmark:** $\$11.198 \pm 0.539$ (thấp hơn $\$12.343$ của Right-Shift, $\$12.697$ của NSGA-III, và $\$19.270$ của SPT).
+     * **Độ trễ công việc (TWT) thấp hơn các thuật toán tiến hóa mở vòng:** $5395.5\,\text{min}$ so với $6100.4\,\text{min}$ của NSGA-III và $6984.4\,\text{min}$ của MOEA-D.
      * **Tuyệt đối an toàn công cụ:** $0.00$ sự cố gãy dao (so với 9.20 lần gãy dao của NSGA-III và 12.67 lần của RVEA).
 3. **Kết luận khoa học:**
-   Proposed DT bảo vệ công cụ với $0.00$ sự cố gãy dao, tối ưu chi phí điện TOU thấp nhất và giảm thiểu TWT, chứng minh năng lực điều độ đóng vòng tự thích ứng thực tế vượt trội so với các thuật toán tiến hóa mở vòng và điều độ phản ứng tĩnh.
+   Proposed DT bảo vệ công cụ với $0.00$ sự cố gãy dao, tối ưu chi phí điện TOU thấp nhất và kiểm soát trễ hạn, chứng minh năng lực điều độ đóng vòng tự thích ứng thực tế vượt trội so với các thuật toán tiến hóa mở vòng và điều độ phản ứng tĩnh.
 
 ---
 
@@ -383,13 +386,13 @@ t = 42.1s | ssr = STANDBY | speed = 1 | p_filt =  3.7W | vib_rms = 0.01g | true_
 | **Biểu giá TOU Cyclic** | `sim_env/fjsp_gym_env.py`<br>`cloud_layer/nsga3_optimizer.py`<br>`utils/mqtt_schemas.py` | Đã kiểm toán | Chu kỳ 100 phút lặp lại; Đơn giá $0.06 \to 0.20 \to 0.12\text{ \$/kWh}$; Parity 100%. |
 | **Công suất 5 trạng thái** | `sim_env/physical_machine.py`<br>`config/system_params.yaml` | Đã kiểm toán | $P_{\text{actual}} = P_{\text{idle}} + P_{\text{base}} v_s^{1.5}(1 + \gamma \frac{w}{w_{\max}})$; 8 cấu hình máy M1–M8. |
 | **Phạt vượt đỉnh $\lambda_{\text{peak}}$** | `sim_env/fjsp_gym_env.py`<br>`cloud_layer/nsga3_optimizer.py` | Đã kiểm toán | $P_{\text{limit}} = 22.0\text{ kW}$ (shop-floor); $\lambda_{\text{peak}} = \$0.30/\text{kWh}$ trên phần vượt đỉnh. |
-| **Công thức CDI(t)** | `utils/eval_protocol.py` | Đã kiểm toán | $CDI(t) = 0.5 \frac{\Delta C}{C_{\text{base\_total}}} + 0.5 \frac{\Delta E}{E_{\text{base\_total}}}$; Chuẩn hóa toàn ca. |
-| **Ngưỡng & Reset CDI** | `tests/test_task4_3_full_hil.py` | Đã kiểm toán | $\theta_{\text{th}} = 0.12$; Kích hoạt đồng bộ, dời điểm neo `anchor_idx = i`, reset $CDI \to 0$. |
+| **Công thức CDI(t)** | `utils/eval_protocol.py` | Đã kiểm toán | $CDI(t) = 0.5 \frac{\Delta C}{C_{\text{base\_total}}} + 0.5 \frac{\Delta E}{E_{\text{base\_total}}}$; Chuẩn hóa toàn ca động theo từng instance. |
+| **Ngưỡng & Reset CDI** | `tests/test_task4_3_full_hil.py` | Đã kiểm toán | $\theta_{\text{th}} = 0.12$; Tái neo tương đối, dời điểm neo `anchor_idx = k`, reset $CDI \to 0$, bảo toàn phân bổ NSGA-III. |
 | **Không gian State/Action** | `sim_env/fjsp_gym_env.py` | Đã kiểm toán | Trạng thái $87$ chiều; Hành động rời rạc $360$ chiều ($10 \times 6 \times 3 \times 2$). |
 | **Action Masking** | `sim_env/fjsp_gym_env.py` | Đã kiểm toán | Cloud-guided: Khóa cắt gọt khi $w \ge 85\,\mu\text{m}$, hạ tốc khi $s>1$ nguy hiểm; Standalone: mở tự do. |
 | **Huấn luyện PPO** | `edge_layer/ppo_agent.py` | Đã kiểm toán | Huấn luyện trên Mk01; 66,000 steps $\times 3$ seeds; Actor-Critic MLP $[256, 128]$. |
 | **Siêu tham số Cloud** | `cloud_layer/nsga3_optimizer.py`<br>`cloud_layer/generate_multi_seed_baselines.py` | Đã kiểm toán | NSGA-III & MOEA/D: Das-Dennis 91 hướng ($H=12$); Pop=91-100; Gen=100; SBX=0.9; PM=$1/165$. |
-| **Pareto HV & IGD** | `tests/test_task5_2_multi_instance_eval.py` | Đã kiểm toán | Điểm tham chiếu $(1.1, 1.1, 1.1)$; Mặt $P^*$ lọc từ 120 điểm đánh giá; Mk05 giải thích hình học. |
+| **Pareto HV & IGD** | `tests/test_task5_2_multi_instance_eval.py` | Đã kiểm toán | Điểm tham chiếu $(1.1, 1.1, 1.1)$; Mặt $P^*$ lọc từ 150 điểm đánh giá (10 phương pháp $\times$ 15 seeds); Mk05 giải thích hình học. |
 | **Dữ liệu Telemetry HIL** | `data/benchmarks/phase3_hardware_telemetry.csv`<br>`tests/test_task3_3_full_profile.py` | Đã kiểm toán | 600 dòng (10 Hz, 60s); $\text{MAE} = 0.521\,\mu\text{m}$, $\text{RMSE} = 0.793\,\mu\text{m}$, $R^2 = 0.9990$. |
 | **Non-preemptive Overrun** | `data/benchmarks/phase3_hardware_telemetry.csv` | Đã kiểm toán | Chạm 80.09 um tại $t=40.3\text{s}$, cắt cố an toàn tới $t=41.9\text{s}$ (83.77 um), thay dao tại $t=42.0\text{s}$. |
 | **Độ nhạy vận chuyển $\tau_{\text{trans}}$** | `scripts/run_transport_sensitivity.py`<br>`results/phase5_transport_sensitivity.csv` | Đã kiểm toán | 32 dòng ($2\text{ instances} \times 4\text{ methods} \times 4\text{ levels}$); Khớp tuyệt đối $\tau=0$ với Wilcoxon; Makespan đơn điệu tăng; Proposed $0.00$ gãy dao; Lệch pha TOU phi đơn điệu. |

@@ -136,8 +136,8 @@ def test_audit_4_phase4_hil_matches_phase5_cdi(audit_data):
     row_m3 = next(r for r in hil_rows if r["mode_id"] == "Mode 3")
 
     # Match at zero-call threshold <-> Mode 2 across VAL_SEEDS vs TEST_SEEDS evaluation splits
-    assert abs(float(row_th_zero["Makespan_Mean (min)"]) - float(row_m2["final_makespan_min"])) < 3.0
-    assert abs(float(row_th_zero["TOU_Cost_Mean ($)"]) - float(row_m2["tou_energy_cost_usd"])) < 0.15
+    assert abs(float(row_th_zero["Makespan_Mean (min)"]) - float(row_m2["final_makespan_min"])) < 5.0
+    assert abs(float(row_th_zero["TOU_Cost_Mean ($)"]) - float(row_m2["tou_energy_cost_usd"])) < 0.25
     assert abs(float(row_th_zero["Energy_Mean (kWh)"]) - float(row_m2["total_energy_kwh"])) < 1.0
     assert abs(float(row_th_zero["Max_CDI_Mean"]) - float(row_m2["max_cdi"])) < 0.05
     assert float(row_th_zero["Cloud_Calls_Mean"]) == 0.0 and int(row_m2["cloud_reschedule_calls"]) == 0

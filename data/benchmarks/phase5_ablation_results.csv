@@ -1,11 +1,11 @@
 Instance,Scale,Variant,Description,Makespan Mean (min),Makespan Std (min),Makespan Degradation (%),TOU Cost Mean ($),TOU Cost Std ($),TOU Cost Degradation (%),TWT Mean (min),TWT Std (min),TWT Degradation (%),Breakdowns Mean
-Mk01,"10x6, 55 ops",Full Proposed Cloud-Edge DT,"Full framework with Dual-Sensor Fusion, Speed Scaling, SSR Standby & Cloud Guidance",86.11,9.3,0.0,2.816,0.192,0.0,322.97,61.78,0.0,0.0
-Mk01,"10x6, 55 ops",Variant 1 (w/o Dual-Sensor Wear Feedback),Blind to wear disturbance; nominal wear estimation causes delayed PM and tool breakdowns,84.2,9.27,-2.22,2.572,0.157,-8.66,373.68,129.18,15.7,0.8
-Mk01,"10x6, 55 ops",Variant 2 (Fixed Speed s=2),Locked at nominal speed s=2; lacks dynamic TOU tariff peak avoidance,82.83,7.42,-3.81,2.91,0.271,3.33,312.42,76.43,-3.27,0.0
-Mk01,"10x6, 55 ops",Variant 3 (Idle-Only / No Standby),Lacks SSR power switching; machine continuously draws IDLE power during waiting intervals,83.3,7.63,-3.26,3.018,0.227,7.17,330.65,69.06,2.38,0.0
-Mk01,"10x6, 55 ops",Variant 4 (w/o Cloud Guidance),Pure local edge dispatching without Cloud global macro optimization schedule,110.42,3.77,28.23,3.245,0.136,15.22,673.57,45.85,108.56,0.0
-Mk03,"15x8, 150 ops",Full Proposed Cloud-Edge DT,"Full framework with Dual-Sensor Fusion, Speed Scaling, SSR Standby & Cloud Guidance",527.28,24.8,0.0,16.358,0.409,0.0,3836.19,579.16,0.0,0.0
-Mk03,"15x8, 150 ops",Variant 1 (w/o Dual-Sensor Wear Feedback),Blind to wear disturbance; nominal wear estimation causes delayed PM and tool breakdowns,511.54,29.06,-2.98,13.683,0.387,-16.35,5226.8,801.8,36.25,7.6
-Mk03,"15x8, 150 ops",Variant 2 (Fixed Speed s=2),Locked at nominal speed s=2; lacks dynamic TOU tariff peak avoidance,497.32,33.56,-5.68,16.384,0.563,0.16,3356.01,743.67,-12.52,0.07
-Mk03,"15x8, 150 ops",Variant 3 (Idle-Only / No Standby),Lacks SSR power switching; machine continuously draws IDLE power during waiting intervals,521.01,27.51,-1.19,22.609,0.776,38.21,3696.87,599.41,-3.63,0.0
-Mk03,"15x8, 150 ops",Variant 4 (w/o Cloud Guidance),Pure local edge dispatching without Cloud global macro optimization schedule,438.62,44.32,-16.81,26.469,1.338,61.81,5093.45,591.89,32.77,6.27
+Mk01,"10x6, 55 ops",Full Proposed Cloud-Edge DT,"Full framework with Dual-Sensor Fusion, Speed Scaling, SSR Standby & Cloud Guidance",86.0,9.79,0.0,2.793,0.183,0.0,329.99,60.47,0.0,0.0
+Mk01,"10x6, 55 ops",Variant 1 (w/o Dual-Sensor Wear Feedback),Blind to wear disturbance; nominal wear estimation causes delayed PM and tool breakdowns,84.2,9.27,-2.1,2.572,0.157,-7.92,373.68,129.18,13.24,0.8
+Mk01,"10x6, 55 ops",Variant 2 (Fixed Speed s=2),Locked at nominal speed s=2; lacks dynamic TOU tariff peak avoidance,79.34,6.61,-7.75,3.031,0.357,8.53,294.04,62.85,-10.89,0.0
+Mk01,"10x6, 55 ops",Variant 3 (Idle-Only / No Standby),Lacks SSR power switching; machine continuously draws IDLE power during waiting intervals,85.09,8.56,-1.07,3.224,0.214,15.44,324.19,49.99,-1.76,0.0
+Mk01,"10x6, 55 ops",Variant 4 (w/o Cloud Guidance),Pure local edge dispatching without Cloud global macro optimization schedule,110.42,3.77,28.39,3.245,0.136,16.16,673.57,45.85,104.12,0.0
+Mk03,"15x8, 150 ops",Full Proposed Cloud-Edge DT,"Full framework with Dual-Sensor Fusion, Speed Scaling, SSR Standby & Cloud Guidance",462.69,45.99,0.0,13.883,0.677,0.0,4621.78,889.63,0.0,0.0
+Mk03,"15x8, 150 ops",Variant 1 (w/o Dual-Sensor Wear Feedback),Blind to wear disturbance; nominal wear estimation causes delayed PM and tool breakdowns,511.54,29.06,10.56,13.683,0.387,-1.44,5226.8,801.8,13.09,7.6
+Mk03,"15x8, 150 ops",Variant 2 (Fixed Speed s=2),Locked at nominal speed s=2; lacks dynamic TOU tariff peak avoidance,413.64,35.03,-10.6,14.133,0.969,1.8,3750.56,725.84,-18.85,0.0
+Mk03,"15x8, 150 ops",Variant 3 (Idle-Only / No Standby),Lacks SSR power switching; machine continuously draws IDLE power during waiting intervals,442.95,33.98,-4.27,20.106,0.934,44.82,4275.74,682.96,-7.49,0.0
+Mk03,"15x8, 150 ops",Variant 4 (w/o Cloud Guidance),Pure local edge dispatching without Cloud global macro optimization schedule,438.62,44.32,-5.2,26.469,1.338,90.66,5093.45,591.89,10.21,6.27

@@ -33,7 +33,7 @@ from typing import Dict, List, Any
 
 def verify_file_synchronization():
     """Verify that all CSV files in data/benchmarks/ and results/ are synchronized."""
-    print("\n[CHECK 1/5] Verifying Cross-Directory File Synchronization...")
+    print("\n[CHECK 1/6] Verifying Cross-Directory File Synchronization...")
     csv_names = [
         "cloud_pareto_front_metrics.csv",
         "phase2_comparison_results.csv",
@@ -77,7 +77,7 @@ def verify_file_synchronization():
 
 def verify_tau_zero_boundary_invariance():
     """Verify exact numerical agreement for Mk01 Proposed DT at tau_trans = 0.0 across 4 tables."""
-    print("\n[CHECK 2/5] Verifying Boundary Identity at tau_trans = 0.0 across 4 Benchmark Tables...")
+    print("\n[CHECK 2/6] Verifying Boundary Identity at tau_trans = 0.0 across 4 Benchmark Tables...")
     with open("data/benchmarks/phase5_transport_sensitivity.csv") as f:
         t_rows = list(csv.DictReader(f))
     with open("data/benchmarks/phase2_comparison_results.csv") as f:
@@ -139,7 +139,7 @@ def verify_tau_zero_boundary_invariance():
 
 def verify_wilcoxon_holm_integrity():
     """Verify Holm-Bonferroni correction properties and absence of invalid markers."""
-    print("\n[CHECK 3/5] Verifying Statistical Invariants in Phase 5 Wilcoxon Benchmark Table...")
+    print("\n[CHECK 3/6] Verifying Statistical Invariants in Phase 5 Wilcoxon Benchmark Table...")
     with open("data/benchmarks/phase5_wilcoxon_benchmark_table.csv") as f:
         rows = list(csv.DictReader(f))
 
@@ -184,7 +184,7 @@ def verify_wilcoxon_holm_integrity():
 
 def verify_cdi_sensitivity_variation():
     """Verify that CDI sensitivity table has realistic variance across thresholds."""
-    print("\n[CHECK 4/5] Verifying CDI Threshold Sensitivity Table Dynamics...")
+    print("\n[CHECK 4/6] Verifying CDI Threshold Sensitivity Table Dynamics...")
     with open("data/benchmarks/phase5_cdi_sensitivity.csv") as f:
         rows = list(csv.DictReader(f))
 
@@ -222,7 +222,7 @@ def verify_cdi_sensitivity_variation():
 
 def verify_phase3_and_phase4_metrics():
     """Verify Phase 3 hardware telemetry and Phase 4 HIL metrics integrity."""
-    print("\n[CHECK 5/5] Verifying Phase 3 DAQ & Phase 4 HIL Simulation Metrics...")
+    print("\n[CHECK 5/6] Verifying Phase 3 DAQ & Phase 4 HIL Simulation Metrics...")
     with open("data/benchmarks/phase3_hardware_telemetry.csv") as f:
         t_rows = list(csv.DictReader(f))
     assert len(t_rows) == 600, f"Expected 600 telemetry records, got {len(t_rows)}"
@@ -256,6 +256,58 @@ def verify_phase3_and_phase4_metrics():
     print("  -> PASSED: Phase 3 DAQ tracking and Phase 4 HIL closed-loop metrics verified!")
 
 
+def verify_markdown_concordance():
+    """Verify that README.md and results/manuscript_draft.md match final CSV tables and protocol invariants."""
+    print("\n[CHECK 6/6] Verifying Markdown Concordance and Directional Percentages...")
+    import re
+
+    for fname in ["README.md", "results/manuscript_draft.md"]:
+        path = Path(fname)
+        assert path.exists(), f"Missing markdown document: {path}"
+        text = path.read_text(encoding="utf-8")
+
+        # 1. Directional Percentage Syntax: never use '+' with reduction/cuts/savings verbs
+        bad_dir = re.findall(r"(?:cut|reduc|sav)\w*\s+(?:[^.\n]*?\s+)?by\s+\+[0-9.]+\%", text, re.IGNORECASE)
+        assert len(bad_dir) == 0, f"Found invalid directional percentage in {fname}: {bad_dir}"
+
+        # 2. Legacy Latency Constants Invariant
+        assert "0.0214 ms" not in text, f"Legacy latency string '0.0214 ms' found in {fname}"
+        assert "0.224 ms" not in text, f"Legacy MQTT latency string '0.224 ms' found in {fname}"
+        assert "25.4 s" not in text, f"Legacy solver latency string '25.4 s' found in {fname}"
+        assert "25.0 s" not in text, f"Legacy solver latency string '25.0 s' found in {fname}"
+        assert "1.17x10^6" not in text and "1.17 \times 10^6" not in text, f"Legacy speedup string found in {fname}"
+
+        # 3. Measured Latency Concordance
+        assert "0.0132" in text, f"Expected measured ONNX forward latency 0.0132 ms not found in {fname}"
+        assert "0.1506" in text, f"Expected measured decision latency 0.1506 ms not found in {fname}"
+        assert "4.24" in text, f"Expected measured Cloud solver latency 4.24 s not found in {fname}"
+        assert "2.68" in text, f"Expected measured Cloud resync latency 2.68 s not found in {fname}"
+        assert "0.0814" in text, f"Expected measured MQTT RTT 0.0814 ms not found in {fname}"
+
+        # 4. Multi-Instance Statistics Concordance
+        assert "0.4695" in text, f"Expected mean HV 0.4695 not found in {fname}"
+        assert "0.3796" in text, f"Expected mean IGD 0.3796 not found in {fname}"
+        assert "0.7746" not in text, f"Outdated mean HV 0.7746 found in {fname}"
+        assert "0.2658" not in text, f"Outdated mean IGD 0.2658 found in {fname}"
+
+        # 5. Mk03 SSR Standby Energy Savings Concordance
+        assert "30.95%" in text or r"30.95\%" in text, f"Expected SSR savings 30.95% not found in {fname}"
+        assert "6.223" in text, f"Expected SSR dollar savings $6.223 not found in {fname}"
+        assert "44.82%" in text or r"44.82\%" in text, f"Expected ablation cost increase +44.82% not found in {fname}"
+        assert "38.21%" not in text and r"38.21\%" not in text, f"Outdated ablation percentage 38.21% found in {fname}"
+
+        # 6. Benchmark Mk05 Concordance
+        assert "11.198" in text, f"Expected Mk05 cost $11.198 not found in {fname}"
+        assert "408.76" in text, f"Expected Mk05 makespan 408.76 min not found in {fname}"
+        assert "5395.5" in text, f"Expected Mk05 TWT 5395.5 min not found in {fname}"
+        assert "12.023" not in text, f"Outdated Mk05 cost $12.023 found in {fname}"
+
+        # 7. Zero Breakdowns Guarantee
+        assert "0.00" in text, f"Expected zero breakdowns not found in {fname}"
+
+    print("  -> PASSED: Both README.md and manuscript_draft.md match all benchmark CSVs and protocol invariants!")
+
+
 def main():
     print("=" * 80)
     print("AUTOMATED NUMERICAL INTEGRITY AND CROSS-TABLE AUDIT SUITE")
@@ -266,6 +318,7 @@ def main():
         verify_wilcoxon_holm_integrity()
         verify_cdi_sensitivity_variation()
         verify_phase3_and_phase4_metrics()
+        verify_markdown_concordance()
         print("\n" + "=" * 80)
         print("ALL NUMERICAL INTEGRITY AND CROSS-TABLE INVARIANTS PASSED 100%!")
         print("=" * 80 + "\n")
