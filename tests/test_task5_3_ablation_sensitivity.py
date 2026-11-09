@@ -288,13 +288,14 @@ def run_phase5_ablation_study(
 # ==============================================================================
 
 def run_phase5_cdi_sensitivity(
-    seeds: List[int] = TEST_SEEDS,
+    seeds: List[int] = VAL_SEEDS,
     output_csv_path: str = "data/benchmarks/phase5_cdi_sensitivity.csv",
     verbose: bool = True,
 ) -> List[Dict[str, Any]]:
     """
     Parametric sensitivity analysis of CDI threshold theta_th in
-    [0.02, 0.05, 0.08, 0.10, 0.12, 0.15, 0.18, 0.22, 0.35, 0.50].
+    [0.02, 0.05, 0.08, 0.10, 0.12, 0.15, 0.18, 0.22, 0.35, 0.50]
+    evaluated across 10 validation seeds (VAL_SEEDS = [201..210]).
     Demonstrates the communication overhead vs. schedule optimality trade-off,
     establishing theta_th in [0.08, 0.15] as the Robust Operating Plateau and
     theta_th = 0.12 as the Selected Operating Center.
@@ -315,6 +316,7 @@ def run_phase5_cdi_sensitivity(
         cost_l: List[float] = []
         energy_l: List[float] = []
         max_cdi_l: List[float] = []
+        comm_overhead_l: List[float] = []
 
         for s in seeds:
             res = run_closed_loop_hil_simulation(seed=s, mode=3, cdi_threshold=th)
@@ -323,6 +325,7 @@ def run_phase5_cdi_sensitivity(
             cost_l.append(float(res["tou_cost_usd"]))
             energy_l.append(float(res["total_energy_kwh"]))
             max_cdi_l.append(float(res["max_cdi"]))
+            comm_overhead_l.append(float(res.get("comm_overhead_s", 0.0)))
 
         calls_m = float(np.mean(calls_l))
         calls_s = float(np.std(calls_l))
@@ -334,6 +337,7 @@ def run_phase5_cdi_sensitivity(
         energy_s = float(np.std(energy_l))
         max_cdi_m = float(np.mean(max_cdi_l))
         max_cdi_s = float(np.std(max_cdi_l))
+        comm_overhead_s = float(np.mean(comm_overhead_l))
 
         # Schedule Composite Index (Normalized weighted average of makespan and TOU cost)
         sched_composite_idx = 0.50 * (cmax_m / cmax_nominal) + 0.50 * (cost_m / cost_nominal)
@@ -341,14 +345,13 @@ def run_phase5_cdi_sensitivity(
         # Total System Cost Index (incorporating cloud communication and computation overhead)
         total_sys_cost_idx = 0.45 * (cmax_m / cmax_nominal) + 0.45 * (cost_m / cost_nominal) + 0.10 * (calls_m / 10.0)
 
-        comm_overhead_s = calls_m * 25.4  # ~25.4s actual Cloud solver latency
-
-        if th < 0.08:
+        # Dynamic operating zone classification based on empirical trigger frequency and system cost
+        if calls_m > 5.0:
             zone = "Over-Triggering Region"
-        elif th <= 0.15:
-            zone = "Robust Operating Plateau"
-        else:
+        elif calls_m < 2.0 or calls_m == 0.0:
             zone = "Uncorrected Drift Region"
+        else:
+            zone = "Robust Operating Plateau"
 
         rec = {
             "CDI_Threshold": th,
@@ -569,7 +572,7 @@ def plot_phase5_ablation_and_sensitivity(
     ax2.annotate(
         "Degradation Cliff\n(Unmitigated Drift)",
         xy=(0.165, 28),
-        xytext=(0.20, 32),
+        xytext=(0.18, 41),
         arrowprops=dict(facecolor="#E67E22", edgecolor="black", arrowstyle="->", lw=1.2),
         bbox=dict(boxstyle="round,pad=0.3", facecolor="#FEF9E7", edgecolor="#E67E22", linewidth=1.0),
         fontsize=7.8, fontweight="bold", color="#B9770E"
@@ -584,14 +587,14 @@ def plot_phase5_ablation_and_sensitivity(
     ax2.plot(knee_th, knee_calls, marker="*", markersize=14, color="#F1C40F", markeredgecolor="black", markeredgewidth=1.2, zorder=10)
     ax2.axvline(knee_th, color="#27AE60", linestyle="--", linewidth=1.8, alpha=0.85)
 
-    # Annotation Box
+    # Annotation Box (placed in clear pocket between blue calls line and purple sys-cost line)
     ax2.annotate(
         f"Selected Operating Center (θ_th = 0.12):\n• Minimum Cloud Calls without Schedule Degradation ({knee_calls:.1f} calls)\n• Near-Optimal Schedule Index ({knee_sched_idx:.4f})\n• Minimum Total System Cost Index ({knee_sys_cost:.4f})",
         xy=(knee_th, knee_calls),
-        xytext=(0.13, 16),
+        xytext=(0.20, 6.5),
         arrowprops=dict(facecolor="#27AE60", edgecolor="black", arrowstyle="->", lw=1.5),
-        bbox=dict(boxstyle="round,pad=0.5", facecolor="#EAFAF1", edgecolor="#27AE60", linewidth=1.2),
-        fontsize=8.2, fontweight="bold", color="#145A32"
+        bbox=dict(boxstyle="round,pad=0.45", facecolor="#EAFAF1", edgecolor="#27AE60", linewidth=1.2),
+        fontsize=8.0, fontweight="bold", color="#145A32"
     )
 
     ax2.set_xlabel("Cumulative Disturbance Index Threshold (θ_th)", fontsize=10.5, fontweight="bold")
@@ -633,7 +636,7 @@ def run_pipeline_if_missing():
     if not ablation_csv.exists():
         run_phase5_ablation_study(DEFAULT_SEEDS, str(ablation_csv), verbose=False)
     if not sensitivity_csv.exists():
-        run_phase5_cdi_sensitivity(TEST_SEEDS, str(sensitivity_csv), verbose=False)
+        run_phase5_cdi_sensitivity(VAL_SEEDS, str(sensitivity_csv), verbose=False)
     if not fig_png.exists():
         plot_phase5_ablation_and_sensitivity(str(ablation_csv), str(sensitivity_csv), str(fig_png))
 
@@ -768,7 +771,7 @@ if __name__ == "__main__":
     print("Executing Task 5.3: Ablation Study & CDI Sensitivity Pipeline")
     print("=" * 70)
     run_phase5_ablation_study(DEFAULT_SEEDS)
-    run_phase5_cdi_sensitivity(TEST_SEEDS)
+    run_phase5_cdi_sensitivity(VAL_SEEDS)
     plot_phase5_ablation_and_sensitivity()
     print("=" * 70)
     print("Pipeline Execution Complete!")

@@ -135,6 +135,12 @@ def run_60s_hardware_verification_scenario(
         writer.writeheader()
         writer.writerows(records)
 
+    # Mirror to results/ if saving to data/benchmarks
+    if "data/benchmarks" in csv_out_path:
+        import shutil
+        os.makedirs("results", exist_ok=True)
+        shutil.copyfile(csv_out_path, "results/phase3_hardware_telemetry.csv")
+
     # Compute Statistical Metrics
     y_true = np.array([r["true_wear_um"] for r in records])
     y_est = np.array([r["estimated_wear_um"] for r in records])
@@ -178,9 +184,9 @@ def generate_verification_plot(
         (0.0, 5.0, "Phase 1: OFF", "#F5F5F5"),
         (5.0, 12.0, "Phase 2: Inrush -> IDLE", "#FFF9C4"),
         (12.0, 22.0, "Phase 3: CUTTING (s=1)", "#E8F5E9"),
-        (22.0, 42.0, "Phase 4: CUTTING (s=3) Fast Wear & Power Drift", "#FFEBEE"),
-        (42.0, 50.0, "Phase 5: STANDBY & PM Replace", "#EDE7F6"),
-        (50.0, 60.0, "Phase 6: Fresh Tool CUTTING (s=3)", "#E0F7FA"),
+        (22.0, 42.0, "Phase 4: CUTTING (s=3) Fast Wear", "#FFEBEE"),
+        (42.0, 50.0, "Phase 5: STANDBY & PM", "#EDE7F6"),
+        (50.0, 60.0, "Phase 6: Fresh Tool (s=3)", "#E0F7FA"),
     ]
 
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 11), sharex=True)
@@ -197,10 +203,10 @@ def generate_verification_plot(
     ax1.plot(t, p_raw, color="#90CAF9", alpha=0.55, linewidth=1.1, label="Raw Power $P_{\\text{raw}}$ (INA226 + PWM noise)", zorder=2)
     ax1.plot(t, p_filt, color="#0D47A1", linewidth=2.2, label="Filtered Power $P_{\\text{filt}}$ (1D Kalman + Median)", zorder=3)
     ax1.set_ylabel("Power (W)", fontsize=11, fontweight="bold")
-    ax1.set_ylim(-5.0, 210.0)
+    ax1.set_ylim(-5.0, 245.0)
     ax1.set_title("High-Fidelity Electro-Mechanical Emulator (with Unmodeled Material & Thermal Disturbances)\nBreadboard Physical Twin Telemetry & Dual-Sensor Tool Wear Verification (60s Profile)", fontsize=12, fontweight="bold", pad=12)
     ax1.grid(True, linestyle="--", alpha=0.5, zorder=1)
-    ax1.legend(loc="upper left", framealpha=0.9, fontsize=9.5)
+    ax1.legend(loc="upper left", bbox_to_anchor=(0.015, 0.86), framealpha=0.92, fontsize=9.0)
 
     # Annotate Inrush Spikes
     ax1.annotate(
@@ -212,7 +218,7 @@ def generate_verification_plot(
     )
     ax1.annotate(
         "Wake-up Inrush Spike\n(2.2x $P_{\\text{cut}} \\approx 181.9$ W)",
-        xy=(50.1, 182.0), xytext=(38.0, 170.0),
+        xy=(50.1, 182.0), xytext=(32.0, 145.0),
         arrowprops=dict(facecolor="#C62828", edgecolor="#C62828", arrowstyle="->", lw=1.5),
         fontsize=9, fontweight="bold", color="#C62828",
         bbox=dict(boxstyle="round,pad=0.3", fc="#FFEBEE", ec="#C62828", alpha=0.9)
@@ -290,13 +296,17 @@ def generate_verification_plot(
     for start, end, label, _ in phases:
         mid = (start + end) / 2.0
         ax1.text(
-            mid, 196.0, label, ha="center", va="top",
-            fontsize=8.5, fontweight="bold", color="#37474F",
-            bbox=dict(boxstyle="square,pad=0.15", fc="#FFFFFF", ec="#B0BEC5", alpha=0.7)
+            mid, 232.0, label, ha="center", va="top",
+            fontsize=8.2, fontweight="bold", color="#37474F",
+            bbox=dict(boxstyle="square,pad=0.15", fc="#FFFFFF", ec="#B0BEC5", alpha=0.85)
         )
 
     plt.tight_layout()
     fig.savefig(plot_out_path, dpi=300)
+    if "tests" in plot_out_path:
+        import shutil
+        os.makedirs("results", exist_ok=True)
+        shutil.copyfile(plot_out_path, "results/phase3_hardware_verification.png")
     plt.close(fig)
 
 
@@ -312,6 +322,10 @@ def test_full_60s_scenario_generation_and_metrics():
     plot_path = "tests/phase3_hardware_verification.png"
 
     records, metrics = run_60s_hardware_verification_scenario(csv_path, plot_path)
+    from scripts.analyze_hardware_telemetry import analyze_hardware_telemetry
+    import shutil
+    analyze_hardware_telemetry(csv_path, "results/phase3_hil_event_summary.csv", verbose=False)
+    shutil.copyfile("results/phase3_hil_event_summary.csv", "data/benchmarks/phase3_hil_event_summary.csv")
 
     # 1. Artifact existence and integrity
     assert os.path.exists(csv_path), "Telemetry CSV file was not created"

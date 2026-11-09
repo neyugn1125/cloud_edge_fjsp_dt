@@ -499,6 +499,7 @@ def plot_ppo_training_curves(
     ax2.set_xlabel("Training Episode", fontsize=11, fontweight="bold")
     ax2.set_ylabel("Makespan (min)", color=color_cmax, fontsize=11, fontweight="bold")
     ax2.tick_params(axis="y", labelcolor=color_cmax)
+    ax2.set_ylim(72.0, 106.0)
     ax2.grid(True, linestyle="--", alpha=0.5)
 
     # Twin axis for TOU Cost
@@ -535,12 +536,13 @@ def plot_ppo_training_curves(
 
     ax2_twin.set_ylabel("TOU Energy Cost ($)", color=color_cost, fontsize=11, fontweight="bold")
     ax2_twin.tick_params(axis="y", labelcolor=color_cost)
+    ax2_twin.set_ylim(2.35, 4.05)
     ax2.set_title("(b) Regime B Convergence: Makespan & TOU Cost vs. Baselines", fontsize=11, fontweight="bold")
 
-    # Combine legends cleanly
+    # Combine legends cleanly in 2 columns at upper right (above curves in 72-106 scale)
     lines_1, labels_1 = ax2.get_legend_handles_labels()
     lines_2, labels_2 = ax2_twin.get_legend_handles_labels()
-    ax2.legend(lines_1 + lines_2, labels_1 + labels_2, loc="upper right", fontsize=7.5, framealpha=0.92)
+    ax2.legend(lines_1 + lines_2, labels_1 + labels_2, loc="upper right", ncol=2, fontsize=7.0, framealpha=0.92)
 
     # -------------------------------------------------------------------------
     # Subplot 3: Tool Breakdown Elimination & PM Policy
@@ -559,6 +561,7 @@ def plot_ppo_training_curves(
     ax3.set_xlabel("Training Episode", fontsize=11, fontweight="bold")
     ax3.set_ylabel("Tool Breakdowns / Episode", color=color_bd, fontsize=11, fontweight="bold")
     ax3.tick_params(axis="y", labelcolor=color_bd)
+    ax3.set_ylim(-0.01, 0.50)
     ax3.grid(True, linestyle="--", alpha=0.5)
 
     ax3_twin = ax3.twinx()
@@ -572,11 +575,12 @@ def plot_ppo_training_curves(
     )
     ax3_twin.set_ylabel("Proactive PM Replacements / Episode", color=color_pm, fontsize=11, fontweight="bold")
     ax3_twin.tick_params(axis="y", labelcolor=color_pm)
+    ax3_twin.set_ylim(0.0, 7.5)
     ax3.set_title("(c) Reliability: Zero Breakdown Suppression & Proactive PM", fontsize=11, fontweight="bold")
 
     lines_3, labels_3 = ax3.get_legend_handles_labels()
     lines_4, labels_4 = ax3_twin.get_legend_handles_labels()
-    ax3.legend(lines_3 + lines_4, labels_3 + labels_4, loc="center right", fontsize=8.0, framealpha=0.92)
+    ax3.legend(lines_3 + lines_4, labels_3 + labels_4, loc="center right", bbox_to_anchor=(0.98, 0.42), fontsize=7.8, framealpha=0.92)
 
     plt.tight_layout()
     plt.savefig(out_file, dpi=300, bbox_inches="tight")

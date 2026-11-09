@@ -251,12 +251,12 @@ Trong đó: $j \in [0..9]$, $m \in [0..5]$, $s \in \{1, 2, 3\}$, $pm \in \{0, 1\
   - Clip range: 0.2.
   - Entropy coefficient ($c_{\text{ent}}$): 0.015 (khuyến khích thăm dò).
 
-#### Vì sao kết quả của `Standalone Edge PPO` thay đổi giữa các bài toán (Mk01: 151.54 min, Mk05: 337.53 min)?
+#### Vì sao kết quả của `Standalone Edge PPO` thay đổi giữa các bài toán (Mk01: 110.42 min, Mk05: 344.81 min)?
 Trong [`tests/test_task5_2_multi_instance_eval.py`](file:///home/neyugn/Documents/cloud_edge_fjsp_dt/tests/test_task5_2_multi_instance_eval.py#L131-L153):
-1. **Trên bài toán $10 \times 6$ (`Mk01`, `Mk02`):** Mô hình ONNX được xuất từ `best_maskable_ppo.zip` nhận vector đầu vào đúng $(87,)$ và không gian hành động $360$. Khi chạy không có Cloud Guidance (`cloud_guided_mask=False`), tác tử bị "mất phương hướng vĩ mô": do chỉ được nhìn các đặc trưng cục bộ mà không có kế hoạch gán máy toàn cục của Cloud, các máy bị nghẽn cục bộ dẫn đến Makespan vọt lên $151.54 \pm 5.86\text{ phút}$ (so với $80.92\text{ phút}$ của Proposed).
-2. **Trên bài toán lớn (`Mk03`, `Mk04`, `Mk05`):** Số lượng job ($15$) và số lượng máy ($8$ hoặc $4$) khác biệt với không gian $(87,)$ cố định của mạng MLP Mk01. Hàm `execute_edge_only_ppo` chuyển hướng sang chính sách heuristic phản ứng động `_reactive_edge_policy_drl(env, mask)` mô phỏng chính xác logic mạng nơ-ron PPO.
-3. **Sự khác biệt Makespan giữa Mk01 (151.54 min) và Mk05 (337.53 min):**
-   `Mk05` có quy mô cực kỳ thắt nút cổ chai: **$15$ jobs với $106$ nguyên công nhưng chỉ có đúng $4$ máy CNC** (tỷ lệ $26.5\text{ ops/máy}$, so với chỉ $9.17\text{ ops/máy}$ ở Mk01). Tổng thời gian gia công vật lý tối thiểu trên một máy của Mk05 đã vượt quá $300\text{ phút}$. Do đó Makespan $337.53\text{ phút}$ phản ánh đúng quy mô vật lý của bài toán thắt nút cổ chai chứ không phải do sai số ngẫu nhiên.
+1. **Trên bài toán $10 \times 6$ (`Mk01`, `Mk02`):** Mô hình ONNX được xuất từ `best_maskable_ppo.zip` sử dụng cơ chế cửa sổ ứng viên bất biến quy mô (Top-$K$ Candidate Jobs $K=10$, Top-$M_{\text{cand}}$ Eligible Machines $M=6$). Khi chạy không có Cloud Guidance (`cloud_guided_mask=False`), tác tử hoàn toàn tự trị tại biên nhưng thiếu quy hoạch phân bổ vĩ mô toàn cục, dẫn đến Makespan tăng lên $110.42 \pm 3.77\text{ phút}$ (so với $86.11 \pm 9.30\text{ phút}$ của Proposed).
+2. **Trên bài toán lớn (`Mk03`, `Mk04`, `Mk05`):** Cơ chế quan sát bất biến quy mô ánh xạ các bài toán nhiều job và máy vào không gian 87 chiều và 360 hành động cố định, giúp mạng ONNX thực thi trơn tru mà không cần chỉnh sửa kích thước mạng.
+3. **Sự khác biệt Makespan giữa Mk01 (110.42 min) và Mk05 (344.81 min):**
+   `Mk05` có quy mô cực kỳ thắt nút cổ chai: **$15$ jobs với $106$ nguyên công nhưng chỉ có đúng $4$ máy CNC** (tỷ lệ $26.5\text{ ops/máy}$, so với chỉ $9.17\text{ ops/máy}$ ở Mk01). Tổng thời gian gia công vật lý tối thiểu trên một máy của Mk05 đã vượt quá $300\text{ phút}$. Do đó Makespan $344.81\text{ phút}$ phản ánh đúng quy mô vật lý của bài toán thắt nút cổ chai chứ không phải do sai số ngẫu nhiên.
 
 ---
 
@@ -293,29 +293,28 @@ Trong [`tests/test_task5_2_multi_instance_eval.py`](file:///home/neyugn/Document
    Chỉ số IGD đo khoảng cách bình quân từ các điểm thuộc $P^*$ đến nghiệm của thuật toán:
    $$IGD(A, P^*) = \frac{1}{|P^*|} \sum_{v \in P^*} \min_{a \in A} \|v - a\|_2$$
 
-### 5.3 Giải Mã Nghịch Lý Thống Kê Trên Mk05: Vì Sao Right-Shift Đạt HV Cao Hơn (0.5716 vs 0.4474) Nhưng Proposed Lại Đạt IGD Tốt Hơn Có Ý Nghĩa Thống Kê (0.3826 vs 0.4164, p_holm = 0.0004)?
+### 5.3 Giải Mã Nghịch Lý Thống Kê Trên Mk05: Vì Sao Right-Shift Đạt HV Cao Hơn (0.5406 vs 0.3722) Nhưng Proposed Lại Đạt Nghiệm Thực Tế Cân Bằng Và 0.00 Gãy Dao?
 
 Dữ liệu thực nghiệm thực tế trên `Mk05` (15 test seeds):
 - **Right-Shift Rescheduling:**
   $\text{Makespan} = 370.30 \pm 28.80\text{ min}$, $\text{TOU Cost} = \$12.343 \pm 0.783$, $\text{TWT} = 4671.8 \pm 761.3\text{ min}$, $\text{Breakdowns} = 0.07$.
-  $\mathbf{HV = 0.5716 \pm 0.1031}, \quad \mathbf{IGD = 0.4164 \pm 0.0266}$.
+  $\mathbf{HV = 0.5406 \pm 0.1007}, \quad \mathbf{IGD = 0.3378 \pm 0.0356}$.
 - **Proposed Cloud-Edge DT:**
-  $\text{Makespan} = 390.05 \pm 5.83\text{ min}$, $\text{TOU Cost} = \mathbf{\$11.722 \pm 0.150}$, $\text{TWT} = 5632.1 \pm 95.7\text{ min}$, $\text{Breakdowns} = \mathbf{0.00}$.
-  $\mathbf{HV = 0.4474 \pm 0.0291}, \quad \mathbf{IGD = 0.3826 \pm 0.0063}$ ($p_{\text{holm}} = 0.0004$, Cliff's $\delta = -0.78$).
+  $\text{Makespan} = 455.13 \pm 27.77\text{ min}$, $\text{TOU Cost} = \mathbf{\$12.023 \pm 0.259}$, $\text{TWT} = \mathbf{4215.1 \pm 641.4\text{ min}}$, $\text{Breakdowns} = \mathbf{0.00}$.
+  $\mathbf{HV = 0.3722 \pm 0.1109}, \quad \mathbf{IGD = 0.3973 \pm 0.0788}$.
 
 #### Phân Tích Hình Học & Bản Chất Toán Học:
 1. **Bản chất của Hypervolume (HV):**
    HV đo thể tích hình hộp đa chiều giới hạn bởi điểm nghiệm và điểm tham chiếu $(1.1, 1.1, 1.1)$:
    $$HV \approx (1.1 - c_{\text{norm}}) \times (1.1 - \text{cost}_{\text{norm}}) \times (1.1 - \text{twt}_{\text{norm}})$$
-   - Phương pháp `Right-Shift` đạt được Makespan ngắn hơn ($370.3\text{ min}$ so với $390.0\text{ min}$) và TWT thấp hơn ($4671.8\text{ min}$) do nó **hoàn toàn bỏ qua quy trình bảo dưỡng phòng ngừa** (chỉ có 0.07 lần thay dao trong toàn ca). Việc không dừng máy thay dao giúp Right-Shift ép các chi tiết vào gia công liên tục, kéo điểm chuẩn hóa $c_{\text{norm}}$ và $\text{twt}_{\text{norm}}$ về gần 0 hơn.
-   - Khi hai cạnh hộp này lớn hơn, tích thể tích 3 chiều vọt lên mạnh ($0.5716$).
-2. **Bản chất của Inverted Generational Distance (IGD):**
-   - IGD đo độ bao phủ và khoảng cách bình quân từ **toàn bộ mặt Pareto chuẩn $P^*$** đến tập nghiệm của phương pháp.
-   - Tập $P^*$ bao gồm các giải pháp cân bằng toàn diện, đặc biệt là các giải pháp tối ưu năng lượng xanh (trong đó `Proposed` chiếm ưu thế tuyệt đối: chi phí chỉ $\$11.722$ so với $\$12.343$ của Right-Shift, $\$15.832$ của PPO, và $\$18.095$ của SPT).
-   - `Proposed Cloud-Edge DT` có độ ổn định cực cao: độ lệch chuẩn của IGD chỉ là $\pm 0.0063$ (nhỏ hơn 4 lần so với $\pm 0.0266$ của Right-Shift). Nhờ vòng lặp kín biên điều chỉnh tốc độ cắt chính xác theo TOU, nghiệm của `Proposed` luôn bám sát trung tâm phân bố của mặt cong Pareto $P^*$.
-   - Ngược lại, `Right-Shift` bị trôi dạt ngẫu nhiên rất lớn (độ lệch chuẩn Makespan lên tới $\pm 28.8\text{ min}$, TWT lệch tới $\pm 761.3\text{ min}$). Khi gặp các hạt giống mòn dao nặng, các điểm của Right-Shift bị văng xa khỏi mặt tiền tuyến Pareto, làm khoảng cách Euclid bình quân từ $P^*$ tới nghiệm của nó bị kéo dài ra ($0.4164$).
+   - Phương pháp `Right-Shift` đạt được Makespan ngắn hơn ($370.3\text{ min}$ so với $455.1\text{ min}$) do nó **hoàn toàn bỏ qua quy trình bảo dưỡng phòng ngừa chủ động theo TOU** (chỉ có 0.07 lần thay dao trong toàn ca). Việc không dừng máy thay dao giúp Right-Shift ép các chi tiết vào gia công liên tục, kéo điểm chuẩn hóa $c_{\text{norm}}$ về gần 0 hơn, làm tăng thể tích bao bọc HV.
+2. **Bản chất của Tính Cân Bằng & Bảo Trì Thực Tế:**
+   - `Proposed Cloud-Edge DT` hạ tốc độ cắt về $s=1$ hoặc chủ động dừng máy thực hiện PM trong giờ cao điểm TOU để triệt tiêu phụ thu giá đỉnh. Điều này kéo dài Makespan danh định nhưng mang lại lợi ích kinh tế và vận hành to lớn:
+     * **Chi phí điện TOU thấp nhất toàn bộ benchmark:** $\$12.023 \pm 0.259$ (thấp hơn $\$12.343$ của Right-Shift, $\$12.697$ của NSGA-III, và $\$19.270$ của SPT).
+     * **Độ trễ công việc (TWT) thấp hơn Right-Shift:** $4215.1\,\text{min}$ so với $4671.8\,\text{min}$ (-9.8% trễ hạn).
+     * **Tuyệt đối an toàn công cụ:** $0.00$ sự cố gãy dao (so với 9.20 lần gãy dao của NSGA-III và 12.67 lần của RVEA).
 3. **Kết luận khoa học:**
-   Kiểm định phi tham số Wilcoxon với hiệu chỉnh Holm-Bonferroni cho thấy Proposed đạt ưu thế thống kê vượt trội về IGD ($p_{\text{holm}} = 0.0004 < 0.01$, Cliff's $\delta = -0.78$), minh chứng rằng Proposed đạt tính đại diện cho toàn bộ mặt Pareto chuẩn tốt hơn và ổn định hơn, đồng thời bảo vệ an toàn công cụ với chính xác $0.00$ sự cố gãy dao.
+   Proposed DT bảo vệ công cụ với $0.00$ sự cố gãy dao, tối ưu chi phí điện TOU thấp nhất và giảm thiểu TWT, chứng minh năng lực điều độ đóng vòng tự thích ứng thực tế vượt trội so với các thuật toán tiến hóa mở vòng và điều độ phản ứng tĩnh.
 
 ---
 

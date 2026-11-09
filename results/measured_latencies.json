@@ -1,0 +1,110 @@
+{
+  "metadata": {
+    "timestamp": "2026-11-09T08:08:28Z",
+    "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.39",
+    "processor": "x86_64",
+    "python_version": "3.12.3",
+    "onnx_model_path": "edge_layer/models/ppo_edge_policy.onnx",
+    "protocol_reference": "Evaluation Protocol v5.5A"
+  },
+  "edge_step_inference_ms": {
+    "mean": 0.150609,
+    "std": 0.006383,
+    "median": 0.149601,
+    "p95": 0.163849,
+    "p99": 0.170973,
+    "min": 0.14129,
+    "max": 0.201843,
+    "n_samples": 1000,
+    "unit": "ms"
+  },
+  "edge_onnx_forward_only_ms": {
+    "mean": 0.013244,
+    "std": 0.001304,
+    "median": 0.01306,
+    "p95": 0.014248,
+    "p99": 0.021371,
+    "min": 0.010686,
+    "max": 0.024934,
+    "n_samples": 1000,
+    "unit": "ms"
+  },
+  "edge_full_episode_ms": {
+    "mean": 7.954974,
+    "std": 0.038062,
+    "median": 7.951435,
+    "p95": 8.015548,
+    "p99": 8.029971,
+    "min": 7.880198,
+    "max": 8.047614,
+    "n_samples": 100,
+    "unit": "ms"
+  },
+  "edge_full_episode_mk01_ms": {
+    "mean": 7.954974,
+    "std": 0.038062,
+    "median": 7.951435,
+    "p95": 8.015548,
+    "p99": 8.029971,
+    "min": 7.880198,
+    "max": 8.047614,
+    "n_samples": 100,
+    "unit": "ms"
+  },
+  "edge_full_episode_mk03_ms": {
+    "mean": 22.706245,
+    "std": 0.302466,
+    "median": 22.723985,
+    "p95": 23.162158,
+    "p99": 23.409372,
+    "min": 21.808568,
+    "max": 23.4245,
+    "n_samples": 50,
+    "unit": "ms"
+  },
+  "mqtt_loopback_rtt_ms": {
+    "mean": 0.081377,
+    "std": 0.031481,
+    "median": 0.078363,
+    "p95": 0.087921,
+    "p99": 0.127125,
+    "min": 0.062928,
+    "max": 0.980721,
+    "n_samples": 1000,
+    "unit": "ms"
+  },
+  "cloud_nsga3_full_solve_s": {
+    "mean": 4.2392,
+    "std": 0.0329,
+    "median": 4.2415,
+    "p95": 4.2832,
+    "p99": 4.2883,
+    "min": 4.2034,
+    "max": 4.2896,
+    "n_samples": 5,
+    "unit": "s"
+  },
+  "cloud_nsga3_full_solve_mk03_s": 14.974903381999866,
+  "cloud_nsga3_resync_solve_s": {
+    "mean": 2.6835,
+    "std": 0.0318,
+    "median": 2.6793,
+    "p95": 2.7308,
+    "p99": 2.7405,
+    "min": 2.6526,
+    "max": 2.7429,
+    "n_samples": 5,
+    "unit": "s"
+  },
+  "cloud_fast_reschedule_active_ms": {
+    "mean": 0.214254,
+    "std": 0.010063,
+    "median": 0.211341,
+    "p95": 0.2339,
+    "p99": 0.241024,
+    "min": 0.204217,
+    "max": 0.317012,
+    "n_samples": 1000,
+    "unit": "ms"
+  }
+}

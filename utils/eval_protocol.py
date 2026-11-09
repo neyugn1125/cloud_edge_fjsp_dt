@@ -65,6 +65,46 @@ MQTT_RTT_MEAN_MS: float = 0.2240
 SPEEDUP_FACTOR: float = CLOUD_SOLVER_LATENCY_MS / EDGE_ONNX_LATENCY_MEAN_MS
 SPEEDUP_RATIO_STR: str = f"~{SPEEDUP_FACTOR / 1e6:.2f}x10^6x"
 
+# Path to empirically measured timing distributions
+MEASURED_LATENCIES_PATH: Path = Path(__file__).resolve().parent.parent / "data" / "benchmarks" / "measured_latencies.json"
+
+
+def load_measured_latencies(path: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
+    """
+    Load empirical measured latency distributions from JSON benchmark file.
+    
+    Includes distributions (mean, std, median, p95, p99, min, max, n_samples) for:
+    - edge_step_inference_ms
+    - edge_onnx_forward_only_ms
+    - edge_full_episode_ms (Mk01 & Mk03)
+    - mqtt_loopback_rtt_ms
+    - cloud_nsga3_full_solve_s
+    - cloud_nsga3_resync_solve_s
+    """
+    p = Path(path) if path is not None else MEASURED_LATENCIES_PATH
+    if p.exists():
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def get_measured_latency_distribution(
+    metric_name: str,
+    path: Optional[Union[str, Path]] = None,
+) -> Dict[str, Any]:
+    """Retrieve empirical latency distribution dictionary for a named benchmark metric."""
+    data = load_measured_latencies(path)
+    if metric_name in data:
+        return data[metric_name]
+    raise KeyError(f"Metric '{metric_name}' not found in measured latencies at {path or MEASURED_LATENCIES_PATH}")
+
+
+# Module-level cached distribution
+MEASURED_LATENCIES: Dict[str, Any] = load_measured_latencies()
+
 
 # ==============================================================================
 # 3. Canonical Multi-Objective Benchmark Dimensions & Reference Hyperparameters
@@ -228,8 +268,10 @@ def export_reproducibility_specs(
             "edge_onnx_latency_mean_ms": EDGE_ONNX_LATENCY_MEAN_MS,
             "edge_onnx_latency_range_ms": [EDGE_ONNX_LATENCY_MIN_MS, EDGE_ONNX_LATENCY_MAX_MS],
             "cloud_solver_latency_ms": CLOUD_SOLVER_LATENCY_MS,
+            "cloud_solver_latency_str": CLOUD_SOLVER_LATENCY_STR,
             "mqtt_round_trip_ms": MQTT_RTT_MEAN_MS,
             "speedup_ratio": SPEEDUP_RATIO_STR,
+            "empirical_measured": load_measured_latencies(),
         },
         "cdi_formulation": {
             "formula": "CDI(t) = alpha * (|C_act(t) - C_base(t)| / C_base_total) + (1 - alpha) * (|E_act(t) - E_base(t)| / E_base_total)",
@@ -339,8 +381,12 @@ $$\text{{CDI}}(t) = \alpha \frac{{|C_{{\text{{act}}}}(t) - C_{{\text{{base}}}}(t
 | Execution Tier | Latency Metric | Physical Measurement | Speedup vs. Cloud Solver |
 | :--- | :--- | :---: | :---: |
 | **Edge ONNX Engine** | Forward CPU Policy Inference | **{EDGE_ONNX_LATENCY_MEAN_MS:.4f} ms** ({EDGE_ONNX_LATENCY_MIN_MS:.3f} - {EDGE_ONNX_LATENCY_MAX_MS:.3f} ms) | **{SPEEDUP_RATIO_STR}** |
+| **Edge Decision Step** | Obs + Mask + Policy Inference | **~0.1506 ms** (P95: 0.1638 ms) | ~168,600x |
+| **Edge Full Shift (Mk01)** | 55 Operations Complete Shift | **~7.955 ms** (P95: 8.016 ms) | ~3,190x |
+| **Edge Full Shift (Mk03)** | 150 Operations Complete Shift | **~22.706 ms** (P95: 23.162 ms) | ~1,118x |
 | **Industrial MQTT** | Round-Trip Telemetry / Trigger | **{MQTT_RTT_MEAN_MS:.4f} ms** | ~111,600x |
-| **Cloud NSGA-III** | 100-Gen Global Re-Optimization | **{CLOUD_SOLVER_LATENCY_S:.1f} s** ({CLOUD_SOLVER_LATENCY_MS:.0f} ms) | 1.0x (Reference) |
+| **Cloud NSGA-III (Resync)**| Remaining Operations Re-Solve | **~2.684 s** (P95: 2.731 s) | 9.5x vs Full Solve |
+| **Cloud NSGA-III (Full)**  | 100-Gen Global Re-Optimization | **{CLOUD_SOLVER_LATENCY_S:.1f} s** ({CLOUD_SOLVER_LATENCY_MS:.0f} ms) | 1.0x (Reference) |
 
 ---
 

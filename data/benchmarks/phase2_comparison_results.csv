@@ -1,10 +1,12 @@
 Method,Makespan Mean (min),Makespan Std (min),TOU Cost Mean ($),TOU Cost Std ($),Total Energy Mean (kWh),Total Energy Std (kWh),TWT Mean (min),TWT Std (min),PM Replacements Mean,Tool Breakdowns Mean,Decision Latency,Control Paradigm
-Rule 1 (SPT + Fast Speed),93.13,13.88,3.709,0.380,23.029,1.106,472.75,164.02,4.73,0.93,< 0.1 ms,Heuristic Rule
+Rule 1 (SPT + Fast Speed),116.22,1.57,3.127,0.118,22.117,0.085,550.67,27.24,0.00,4.80,< 0.1 ms,Heuristic Rule
 Rule 2 (EET + Eco Speed),94.67,2.49,2.455,0.043,19.092,0.051,424.08,11.26,3.27,0.00,< 0.1 ms,Heuristic Rule
 Rule 3 (EDD + Balanced Speed),124.55,8.38,3.662,0.070,26.760,0.198,544.26,80.72,6.73,0.00,< 0.1 ms,Heuristic Rule
-Rule 4 (Random Valid Policy),98.90,10.49,3.982,0.318,27.027,1.251,666.05,137.58,6.87,0.07,< 0.1 ms,Random Baseline
+Rule 4 (Random Valid Policy),110.50,19.58,4.021,0.300,27.154,1.324,781.90,285.33,5.73,1.07,< 0.1 ms,Random Baseline
 Right-Shift Rescheduling (Reactive Baseline),79.58,5.95,2.594,0.152,18.856,0.285,321.09,95.12,4.27,0.00,< 0.1 ms,Reactive Dynamic Dispatch
-NSGA-III Open-Loop (Static Cloud Schedule without Edge Twin),83.64,11.90,2.570,0.233,19.034,0.428,362.67,101.70,2.07,0.87,25.4 ± 1.2 s,Cloud Offline Optimization (Open-Loop)
-Cloud-Edge Collaborative DT (NSGA-III + Edge MaskablePPO ONNX),86.11,9.30,2.816,0.192,19.991,1.263,322.97,61.78,5.60,0.00,0.0214 ms,Cloud-Edge Collaborative DT (Closed-Loop)
+NSGA-II Open-Loop (Static Cloud Schedule without Edge Twin),82.69,11.90,2.573,0.199,18.997,0.457,365.37,159.79,2.00,0.73,23.5 ± 1.1 s,Cloud Offline Optimization (Open-Loop)
 MOEA-D Open-Loop (Static Cloud Schedule without Edge Twin),79.77,10.15,2.606,0.127,19.436,0.509,323.17,128.23,2.20,0.80,22.8 ± 1.1 s,Cloud Offline Optimization (Open-Loop)
+RVEA Open-Loop (Static Cloud Schedule without Edge Twin),67.47,10.34,3.052,0.368,19.653,0.632,183.99,105.62,2.67,0.60,24.1 ± 1.2 s,Cloud Offline Optimization (Open-Loop)
+NSGA-III Open-Loop (Static Cloud Schedule without Edge Twin),83.64,11.90,2.570,0.233,19.034,0.428,362.67,101.70,2.07,0.87,25.4 ± 1.2 s,Cloud Offline Optimization (Open-Loop)
 Standalone Edge PPO (No Cloud Prior),110.42,3.77,3.245,0.136,23.941,0.204,673.57,45.85,5.87,0.00,0.0214 ms,Edge Reactive DRL (No Cloud Guidance)
+Cloud-Edge Collaborative DT (NSGA-III + Edge MaskablePPO ONNX),86.11,9.30,2.816,0.192,19.991,1.263,322.97,61.78,5.60,0.00,0.0214 ms,Cloud-Edge Collaborative DT (Closed-Loop)

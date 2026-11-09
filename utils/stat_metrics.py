@@ -18,6 +18,90 @@ from pymoo.indicators.igd import IGD
 from scipy import stats
 
 
+def extract_non_dominated_front(points: np.ndarray) -> np.ndarray:
+    """
+    Filter non-dominated points from a set of 3-objective vectors (minimization).
+    Removes dominated and duplicate points according to Pareto dominance:
+        x dominates y (x < y) iff for all k, x_k <= y_k and for some k, x_k < y_k.
+
+    Args:
+        points: Array of shape (N, 3) or (N, M) representing objective vectors.
+
+    Returns:
+        np.ndarray: Array of non-dominated objective vectors of shape (K, M).
+    """
+    pts = np.asarray(points, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[0] <= 1:
+        return pts.copy()
+
+    unique_pts = np.unique(pts, axis=0)
+    n = len(unique_pts)
+    is_efficient = np.ones(n, dtype=bool)
+
+    for i in range(n):
+        if not is_efficient[i]:
+            continue
+        c = unique_pts[i]
+        # Points dominated by c
+        dominated = np.all(c <= unique_pts, axis=1) & np.any(c < unique_pts, axis=1)
+        is_efficient[dominated] = False
+
+    return unique_pts[is_efficient]
+
+
+def calculate_euclidean_distance_to_front(
+    point: Union[List[float], np.ndarray],
+    ref_front: np.ndarray,
+) -> float:
+    """
+    Calculate minimum Euclidean distance D_PF from a realized objective vector
+    to the empirical Pareto reference front:
+        D_PF(f_hat, P*) = min_{y in P*} ||f_hat - y||_2
+
+    Unlike single-point IGD (which averages distances from all Pareto points to the
+    single realized point and thus inflates the value when the front is wide), D_PF
+    faithfully reflects how close the realized point is to the closest Pareto-optimal point.
+
+    Args:
+        point: 1D array of shape (3,) or 2D array of shape (1, 3).
+        ref_front: Array of shape (M, 3) representing the Pareto reference front.
+
+    Returns:
+        float: Minimum Euclidean distance in [0.0, inf).
+    """
+    pt = np.asarray(point, dtype=np.float64).flatten()
+    front = np.asarray(ref_front, dtype=np.float64)
+    if front.ndim != 2 or front.shape[0] == 0:
+        raise ValueError("Reference Pareto front must be a non-empty 2D array.")
+    diff = front - pt
+    dist = np.linalg.norm(diff, axis=1)
+    return float(np.min(dist))
+
+
+def calculate_point_hypervolume(
+    point: Union[List[float], np.ndarray],
+    ref_point: np.ndarray = np.array([1.1, 1.1, 1.1]),
+) -> float:
+    """
+    Calculate analytical hypervolume contribution of a single 3-objective point:
+        HV({f_hat}, r) = prod_{k=1}^3 (r_k - f_hat_k) if for all k, f_hat_k < r_k else 0.0
+
+    Args:
+        point: 1D or 2D array of 3 objective values.
+        ref_point: 3D reference point, default [1.1, 1.1, 1.1].
+
+    Returns:
+        float: Dominated hypervolume contribution in [0.0, 1.1^3 = 1.331].
+    """
+    pt = np.asarray(point, dtype=np.float64).flatten()
+    ref = np.asarray(ref_point, dtype=np.float64).flatten()
+    if len(pt) != 3 or len(ref) != 3:
+        raise ValueError("calculate_point_hypervolume requires 3-objective vectors.")
+    if np.any(pt >= ref):
+        return 0.0
+    return float(np.prod(ref - pt))
+
+
 def normalize_multiobjective_fronts(
     fronts: Union[List[np.ndarray], Dict[str, np.ndarray], np.ndarray],
     ideal_point: Optional[np.ndarray] = None,
@@ -261,6 +345,82 @@ def compute_vargha_delaney_a12(
     """
     delta = compute_cliffs_delta(proposed_scores, baseline_scores)
     return float((delta + 1.0) / 2.0)
+
+
+def compute_paired_rank_biserial(
+    proposed_scores: Union[List[float], np.ndarray],
+    baseline_scores: Union[List[float], np.ndarray],
+) -> float:
+    """
+    Compute Paired Rank-Biserial Correlation (r_rb) for paired observations
+    matching the Wilcoxon Signed-Rank Test (Kerby, 2014).
+
+    Formula:
+        r_rb = (W+ - W-) / (W+ + W-) = (W+ - W-) / (N_r * (N_r + 1) / 2)
+
+    Range:
+        r_rb in [-1.0, +1.0]
+        - r_rb > 0: Proposed values tend to be larger than Baseline.
+        - r_rb < 0: Proposed values tend to be smaller than Baseline.
+        - |r_rb| = 1.0: Complete paired dominance (all pairs strictly favor one method).
+
+    Args:
+        proposed_scores: Array-like paired samples for Proposed algorithm (length N).
+        baseline_scores: Array-like paired samples for Baseline algorithm (length N).
+
+    Returns:
+        float: Paired rank-biserial correlation in [-1.0, 1.0].
+    """
+    x = np.asarray(proposed_scores, dtype=np.float64)
+    y = np.asarray(baseline_scores, dtype=np.float64)
+    if len(x) != len(y):
+        raise ValueError(f"Sample length mismatch: len(x)={len(x)}, len(y)={len(y)}")
+
+    diff = x - y
+    non_zero = diff[diff != 0.0]
+    if len(non_zero) == 0:
+        return 0.0
+
+    abs_diff = np.abs(non_zero)
+    ranks = stats.rankdata(abs_diff)
+    w_plus = float(np.sum(ranks[non_zero > 0]))
+    w_minus = float(np.sum(ranks[non_zero < 0]))
+    total = w_plus + w_minus
+    return float((w_plus - w_minus) / total) if total > 0 else 0.0
+
+
+def compute_paired_cohens_d(
+    proposed_scores: Union[List[float], np.ndarray],
+    baseline_scores: Union[List[float], np.ndarray],
+) -> float:
+    """
+    Compute Paired Cohen's d_z for repeated-measures / paired samples (Lakens, 2013).
+
+    Formula:
+        d_z = mean(D) / std(D, ddof=1)
+        where D_i = proposed_i - baseline_i.
+
+    Args:
+        proposed_scores: Array-like paired samples for Proposed algorithm.
+        baseline_scores: Array-like paired samples for Baseline algorithm.
+
+    Returns:
+        float: Cohen's d_z effect size.
+    """
+    x = np.asarray(proposed_scores, dtype=np.float64)
+    y = np.asarray(baseline_scores, dtype=np.float64)
+    if len(x) != len(y):
+        raise ValueError(f"Sample length mismatch: len(x)={len(x)}, len(y)={len(y)}")
+
+    diff = x - y
+    n = len(diff)
+    if n < 2:
+        return 0.0
+    mean_d = float(np.mean(diff))
+    std_d = float(np.std(diff, ddof=1))
+    if std_d < 1e-9:
+        return 0.0
+    return float(mean_d / std_d)
 
 
 def holm_bonferroni_correction(
