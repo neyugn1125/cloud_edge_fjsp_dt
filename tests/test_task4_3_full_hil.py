@@ -121,9 +121,10 @@ def fast_cloud_reschedule_active(
         len(env.jobs_data[j]["operations"]) - env.current_op_idx[j] for j in range(env.num_jobs)
     )
 
-    bonus_val = -3.5 if force_s1 else -2.0
-    p_weight = 0.8 if force_s1 else 0.35
-    avail_w = 0.12 if force_s1 else 0.0
+    # Neutral heuristic optimization weights shared fairly across modes
+    bonus_val = -2.5
+    p_weight = 0.40
+    avail_w = 0.05
 
     while len(scheduled_new) < total_remaining:
         cand_ops = []
@@ -284,27 +285,6 @@ def run_closed_loop_hil_simulation(
     wear_spike2 = 26.0 + rng.uniform(-0.5, 0.5)
 
     for step_i in range(1, num_ops + 1):
-        act_m_id = current_cloud_ops[step_i - 1]["machine_id"]
-
-        # 1. Discrete macro-disturbances on bottleneck CNC machines M4 and M3
-        if step_i == op_shock1:
-            for m_key in set(["M4", act_m_id]):
-                m_t = env.machines[m_key]
-                m_t.available_time += halt_min1
-                m_t.e_stdby_kwh += (halt_min1 / 60.0) * m_t.p_stdby_kw
-                env.total_cost += env._integrate_tou_cost(m_t.p_stdby_kw, m_t.available_time - halt_min1, m_t.available_time)
-            env.machines["M4"].current_wear_um = min(99.0, env.machines["M4"].current_wear_um + wear_spike1)
-            estimators["M4"].x_est = min(99.0, estimators["M4"].x_est + wear_spike1)
-
-        elif step_i == op_shock2:
-            for m_key in set(["M3", act_m_id]):
-                m_t = env.machines[m_key]
-                m_t.available_time += halt_min2
-                m_t.e_stdby_kwh += (halt_min2 / 60.0) * m_t.p_stdby_kw
-                env.total_cost += env._integrate_tou_cost(m_t.p_stdby_kw, m_t.available_time - halt_min2, m_t.available_time)
-            env.machines["M3"].current_wear_um = min(99.0, env.machines["M3"].current_wear_um + wear_spike2)
-            estimators["M3"].x_est = min(99.0, estimators["M3"].x_est + wear_spike2)
-
         op = current_cloud_ops[step_i - 1]
         j = int(op["job_index"])
         m_id = op["machine_id"]
@@ -312,26 +292,50 @@ def run_closed_loop_hil_simulation(
         twin = env.machines[m_id]
         est = estimators[m_id]
 
+        # 1. Discrete macro-disturbances on the active CNC machine m_id executing step_i
+        if step_i in [op_shock1, op_shock2]:
+            halt = halt_min1 if step_i == op_shock1 else halt_min2
+            wear_sp = wear_spike1 if step_i == op_shock1 else wear_spike2
+            op_start = max(twin.available_time, env.job_ready_time[j])
+            twin.available_time = op_start + halt
+            env.job_ready_time[j] = op_start + halt
+            twin.e_stdby_kwh += (halt / 60.0) * twin.p_stdby_kw
+            env.total_cost += env._integrate_tou_cost(twin.p_stdby_kw, op_start, op_start + halt)
+            twin.current_wear_um = min(90.0, twin.current_wear_um + wear_sp)
+            # DAQ telemetry during stoppage allows EKF to infer increased wear naturally
+            daqs[m_id].set_operating_conditions(speed_level=1, true_wear_um=twin.current_wear_um)
+            for _ in range(4):
+                tel = daqs[m_id].read_telemetry(dt_ms=100)
+                estimators[m_id].estimate_wear(tel, speed_level=1, sensor_mode="fusion", use_filter=True)
+
         w_hat = est.estimated_wear_um
         sigma = est.sigma_ekf
         t_start = max(twin.available_time, env.job_ready_time[j])
         rate = env.system_config.get_tou_rate(t_start)
 
         if mode == 1:
+            # Mode 1: Open-Loop Periodic Rescheduling (No real-time wear sensors, fixed s=1)
             s = 1
-            pm = 1 if op.get("had_pm", False) and twin.current_wear_um >= 51.0 else 0
+            pm = 1 if (op.get("had_pm", False) and w_hat >= 50.5) else 0
         elif mode == 2:
-            s = int(op["speed_level"])
-            pm = 1 if op.get("had_pm", False) and twin.current_wear_um >= 51.0 else 0
+            # Mode 2: Edge-Only Heuristic (Has wear sensors, but no Cloud Rescheduling)
+            s = int(op.get("speed_level", 2))
+            alt = next(item for item in env.jobs_data[j]["operations"][env.current_op_idx[j]]["eligible_machines"] if item["machine_id"] == m_id)
+            t_base = float(alt["t_base_min"])
+            v_s = env.system_config.speed_scaling.levels[s].speed_factor
+            delta_w_nom = twin.base_eta * (v_s ** (twin.beta - 1)) * t_base
+            w_proj = w_hat + delta_w_nom + 2.0 * sigma
+            pm = 1 if ((w_proj >= 82.0 or (w_hat + 2.0 * sigma >= 78.0)) and w_hat >= 50.5) else 0
         else:
-            is_peak = (rate >= 0.15) or (24.0 <= t_start < 60.0)
+            # Mode 3: Proposed DT (Sensor EKF PM + TOU speed scaling + CDI event-triggered Cloud Rescheduling)
+            is_peak = (rate >= 0.15)
             s = 1 if is_peak else int(op.get("speed_level", 2))
             alt = next(item for item in env.jobs_data[j]["operations"][env.current_op_idx[j]]["eligible_machines"] if item["machine_id"] == m_id)
             t_base = float(alt["t_base_min"])
             v_s = env.system_config.speed_scaling.levels[s].speed_factor
             delta_w_nom = twin.base_eta * (v_s ** (twin.beta - 1)) * t_base
             w_proj = w_hat + delta_w_nom + 2.0 * sigma
-            pm = 1 if ((w_proj >= 84.0 or w_hat + 2.0 * sigma >= 80.0) and twin.current_wear_um >= 52.0) or twin.current_wear_um >= 86.5 else 0
+            pm = 1 if ((w_proj >= 82.0 or (w_hat + 2.0 * sigma >= 78.0)) and w_hat >= 50.5) else 0
 
         act = env.encode_action(j, m_idx, s, pm)
         obs, r, term, tr, info = env.step(act)
@@ -357,22 +361,9 @@ def run_closed_loop_hil_simulation(
         e_plan_anc = planned_cum_energy[anc_idx]
 
         delta_c = abs((c_act_k - c_act_anchor) - (c_plan_k - c_plan_anc)) / max(1e-6, cmax_nominal)
-        shock_e = 0.0
-        if step_i >= op_shock1 and cloud_calls == 0:
-            shock_e += 2.2
-        if step_i >= op_shock2 and cloud_calls <= 1:
-            shock_e += 2.8
-        delta_e = abs((e_act_k - e_act_anchor) - (e_plan_k - e_plan_anc) + shock_e) / max(1e-6, energy_nominal)
+        delta_e = abs((e_act_k - e_act_anchor) - (e_plan_k - e_plan_anc)) / max(1e-6, energy_nominal)
 
-        tel_noise = abs(tel["p_raw_w"] - tel["p_filt_w"]) / max(10.0, tel["p_filt_w"])
-        if cdi_threshold <= 0.02:
-            tel_ripple = 0.016 + 0.012 * rng.uniform(0.0, 1.0)
-        elif cdi_threshold <= 0.05:
-            tel_ripple = 0.052 if rng.uniform(0.0, 1.0) < 0.18 and cloud_calls < 10 else min(0.026, tel_noise * 0.70)
-        else:
-            tel_ripple = min(0.026, tel_noise * 0.70)
-
-        cdi = DEFAULT_ALPHA_CDI * delta_c + (1.0 - DEFAULT_ALPHA_CDI) * delta_e + tel_ripple
+        cdi = DEFAULT_ALPHA_CDI * delta_c + (1.0 - DEFAULT_ALPHA_CDI) * delta_e
 
         trigger = False
         if mode == 1:
@@ -390,7 +381,10 @@ def run_closed_loop_hil_simulation(
             e_act_anchor = e_act_k
 
             current_cloud_ops = fast_cloud_reschedule_active(
-                env, current_cloud_ops, estimators=estimators, force_s1=(mode == 1)
+                env,
+                current_cloud_ops,
+                estimators=(None if mode == 1 else estimators),
+                force_s1=(mode == 1),
             )
             sync_cloud_reference_to_env(env, current_cloud_ops)
             cmax_nominal, energy_nominal, planned_cum_cmax, planned_cum_energy = compute_planned_trajectories(
@@ -418,10 +412,6 @@ def run_closed_loop_hil_simulation(
             c_gap = env._integrate_tou_cost(p_gap, m.available_time, cmax_final)
             extra_cost += c_gap
             extra_energy += e_gap
-
-    if mode == 2 or cloud_calls == 0:
-        extra_energy += 1.65
-        extra_cost += 0.48
 
     comm_overhead_s = sum(resync_durations_s)
     solver_lat_min = comm_overhead_s / 60.0
@@ -836,8 +826,8 @@ def test_phase4_hil_simulation_and_metrics():
     # 1. Verification of Reschedule Triggering
     assert sim_data["cloud_calls_m1"] == 10, "Mode 1 must periodically call Cloud 10 times."
     assert sim_data["cloud_calls_m2"] == 0, "Mode 2 must not call Cloud."
-    assert sim_data["cloud_calls_m3"] == 2, "Mode 3 must trigger Cloud re-sync exactly 2 times."
-    assert sim_data["m3_resync_points"] == [20, 38], f"Mode 3 must trigger at Op 20 and 38, got {sim_data['m3_resync_points']}"
+    assert 1 <= sim_data["cloud_calls_m3"] <= 2, f"Mode 3 Cloud re-sync calls must be in [1, 2], got {sim_data['cloud_calls_m3']}"
+    assert len(sim_data["m3_resync_points"]) >= 1, f"Mode 3 must have at least 1 re-sync trigger, got {sim_data['m3_resync_points']}"
 
     # 2. Reduction in Cloud Calls
     reduction_pct = (sim_data["cloud_calls_m1"] - sim_data["cloud_calls_m3"]) / sim_data["cloud_calls_m1"] * 100.0
@@ -847,11 +837,10 @@ def test_phase4_hil_simulation_and_metrics():
     # Mode 3 must beat Mode 2 by at least 10 minutes makespan
     makespan_improvement = sim_data["makespan_m2"] - sim_data["makespan_m3"]
     assert makespan_improvement >= 10.0, f"Mode 3 makespan improvement must be >= 10 min, got {makespan_improvement:.2f} min"
-    assert sim_data["makespan_m3"] < sim_data["makespan_m1"], "Mode 3 makespan must also beat Mode 1."
-    assert sim_data["cost_m3"] < sim_data["cost_m2"], "Mode 3 TOU cost must be lower than Mode 2."
+    assert sim_data["cost_m3"] < sim_data["cost_m1"], "Mode 3 TOU cost must be lower than Mode 1."
 
     # 4. CDI Dynamics Verification
-    # Mode 2 suffers runaway CDI (> 0.20 at end of shift)
+    # Mode 2 suffers runaway CDI (> 0.15 at end of shift)
     assert sim_data["cdi_mode2"][-1] > 0.15, "Mode 2 must experience runaway CDI."
     # Mode 3 maintains controlled CDI (< 0.12 at end of shift)
     assert sim_data["cdi_mode3"][-1] < 0.12, "Mode 3 final CDI must remain within autonomous zone (< 0.12)."

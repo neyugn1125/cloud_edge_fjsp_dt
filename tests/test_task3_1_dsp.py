@@ -77,23 +77,47 @@ class SimpleKalmanFilter1D:
 class VibrationRMSCalculator:
     """
     Python mirror of C++ VibrationRMSCalculator in firmware_esp32/src/main.cpp.
-    20-sample circular sliding window (100 ms at 200 Hz).
+    20-sample circular sliding window (100 ms at 200 Hz) with 1st-order high-pass / EMA
+    gravity removal (alpha_dc = 0.02).
     """
-    def __init__(self, window_size: int = 20):
+    def __init__(self, window_size: int = 20, alpha_dc: float = 0.02):
         self.window_size = window_size
+        self.alpha_dc = alpha_dc
         self._buf = [0.0] * window_size
         self._head = 0
         self._count = 0
         self._sq_sum = 0.0
+        self._gx = 0.0
+        self._gy = 0.0
+        self._gz = 0.0
+        self._g_init = False
 
     def reset(self):
         self._head = 0
         self._count = 0
         self._sq_sum = 0.0
+        self._gx = 0.0
+        self._gy = 0.0
+        self._gz = 0.0
+        self._g_init = False
         self._buf = [0.0] * self.window_size
 
     def update(self, ax: float, ay: float, az: float) -> float:
-        mag_sq = ax * ax + ay * ay + az * az
+        if not self._g_init:
+            self._gx = ax
+            self._gy = ay
+            self._gz = az
+            self._g_init = True
+        else:
+            self._gx += self.alpha_dc * (ax - self._gx)
+            self._gy += self.alpha_dc * (ay - self._gy)
+            self._gz += self.alpha_dc * (az - self._gz)
+
+        dx = ax - self._gx
+        dy = ay - self._gy
+        dz = az - self._gz
+        mag_sq = dx * dx + dy * dy + dz * dz
+
         if self._count >= self.window_size:
             self._sq_sum -= self._buf[self._head]
             if self._sq_sum < 0.0:
@@ -194,44 +218,79 @@ def test_dsp_power_filtering_noise_reduction():
 
 def test_vibration_rms_sliding_window():
     """
-    Verify the 20-sample (100 ms) sliding window RMS calculation.
+    Verify the 20-sample (100 ms) sliding window RMS calculation with 1g static Earth gravity removal.
     """
-    calc = VibrationRMSCalculator(window_size=20)
+    calc = VibrationRMSCalculator(window_size=20, alpha_dc=0.02)
 
-    # 1. Constant vibration components
-    # ax = 0.5, ay = 0.5, az = 0.5 -> mag = sqrt(0.75) ~ 0.8660
-    for _ in range(25):
-        rms = calc.update(0.5, 0.5, 0.5)
-    expected_rms = math.sqrt(0.5**2 + 0.5**2 + 0.5**2)
-    assert pytest.approx(expected_rms, rel=1e-3) == rms
+    # 1. Earth gravity rejection test: sensor resting flat under 1.0g gravity vector (0, 0, 1.0)
+    # The EMA high-pass filter tracks _gz = 1.0 and isolates dynamic vibration (RMS ~ 0.0g)
+    for _ in range(50):
+        rms = calc.update(0.0, 0.0, 1.0)
+    assert rms < 0.01, f"Gravity rejection failed: static 1.0g produced non-zero dynamic vibration RMS {rms:.4f}g"
 
-    # 2. Step transition in vibration from IDLE (~0.08g) to CUTTING (~1.25g)
+    # Also test tilted mounting orientation: (0.577, 0.577, 0.577) -> |g| = 1.0g
     calc.reset()
-    for _ in range(20):
-        calc.update(0.04, 0.05, 0.05)  # IDLE vibration
-    idle_rms = calc.update(0.04, 0.05, 0.05)
-    assert 0.05 <= idle_rms <= 0.12
+    for _ in range(50):
+        rms = calc.update(0.577, 0.577, 0.577)
+    assert rms < 0.01, f"Tilted gravity rejection failed: produced dynamic vibration RMS {rms:.4f}g"
 
-    # Step into cutting vibration: ax=0.6, ay=0.8, az=0.8 -> sqrt(0.36 + 0.64 + 0.64) = sqrt(1.64) ~ 1.28g
-    for _ in range(20):
-        calc.update(0.6, 0.8, 0.8)
-    cutting_rms = calc.update(0.6, 0.8, 0.8)
-    assert pytest.approx(math.sqrt(1.64), rel=1e-3) == cutting_rms
+    # 2. Dynamic AC vibration test: high frequency oscillation superimposed on 1.0g Earth gravity
+    # ax = 0.5*sin(omega*t), ay = 0.5*cos(omega*t), az = 1.0 + 0.5*sin(2*omega*t)
+    calc.reset()
+    # Apply sinusoidal dynamic vibration
+    rms_vals = []
+    for i in range(200):
+        phase = i * 0.3
+        d_ax = 0.5 * math.sin(phase)
+        d_ay = 0.5 * math.cos(phase)
+        d_az = 0.5 * math.sin(2.0 * phase)
+        # Raw reading contains 1.0g Earth gravity on Z
+        raw_az = 1.0 + d_az
+        rms = calc.update(d_ax, d_ay, raw_az)
+        if i >= 100:
+            rms_vals.append(rms)
+
+    mean_dynamic_rms = float(np.mean(rms_vals))
+    # Theoretical RMS of 3 sinusoids each amplitude 0.5 is sqrt(3 * (0.5^2 / 2)) = sqrt(0.375) ~ 0.612g
+    assert pytest.approx(0.612, abs=0.08) == mean_dynamic_rms
+
+    # 3. Step transition in dynamic vibration from IDLE (~0.05g) to CUTTING (~1.25g)
+    calc.reset()
+    # Settling under idle condition
+    for i in range(100):
+        noise = 0.05 * math.sin(i * 0.5)
+        calc.update(noise, noise, 1.0 + noise)
+    idle_rms = calc.update(0.04, 0.04, 1.04)
+    assert idle_rms < 0.12
+
+    # Step into cutting vibration: dynamic amplitudes ax=0.6, ay=0.8, az=0.8
+    for i in range(50):
+        ph = i * 0.7
+        c_ax = 0.6 * math.sin(ph)
+        c_ay = 0.8 * math.cos(ph)
+        c_az = 0.8 * math.sin(ph + 1.0)
+        calc.update(c_ax, c_ay, 1.0 + c_az)
+    cutting_rms = calc.update(0.6, 0.8, 1.0 + 0.8)
+    assert cutting_rms > 0.5
 
 
 def test_serial_json_telemetry_schema():
     """
     Verify that the telemetry format matches the exact contract:
-    {"ts_ms": 1000, "v_bus": 24.05, "i_amp": 2.40, "p_raw_w": 61.2, "p_filt_w": 57.7, "vib_rms_g": 1.25, "ssr_state": "CUTTING"}
+    {"ts_ms": 1000, "v_bus": 24.05, "i_amp": 2.40, "p_raw_w": 61.2, "p_filt_w": 57.7,
+     "vib_rms_g": 1.25, "ssr_state": "CUTTING", "sensor_ok": true, "sim_fallback": false}
     """
     sample_json = (
         '{"ts_ms": 1000, "v_bus": 24.05, "i_amp": 2.40, '
         '"p_raw_w": 61.2, "p_filt_w": 57.7, "vib_rms_g": 1.25, '
-        '"ssr_state": "CUTTING"}'
+        '"ssr_state": "CUTTING", "sensor_ok": true, "sim_fallback": false}'
     )
     payload = json.loads(sample_json)
 
-    required_keys = ["ts_ms", "v_bus", "i_amp", "p_raw_w", "p_filt_w", "vib_rms_g", "ssr_state"]
+    required_keys = [
+        "ts_ms", "v_bus", "i_amp", "p_raw_w", "p_filt_w",
+        "vib_rms_g", "ssr_state", "sensor_ok", "sim_fallback",
+    ]
     for k in required_keys:
         assert k in payload, f"Missing key {k} in telemetry payload"
 
@@ -242,6 +301,8 @@ def test_serial_json_telemetry_schema():
     assert payload["p_filt_w"] == pytest.approx(57.7, rel=1e-2)
     assert payload["vib_rms_g"] == pytest.approx(1.25, rel=1e-2)
     assert payload["ssr_state"] in {"CUTTING", "IDLE", "STANDBY", "OFF"}
+    assert payload["sensor_ok"] is True
+    assert payload["sim_fallback"] is False
 
 
 def test_command_parser_and_ssr_states():

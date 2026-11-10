@@ -6,7 +6,7 @@
 [![Edge AI](https://img.shields.io/badge/Edge%20AI-ONNX%20Runtime%20(CPU)-0078D4.svg?style=flat-square&logo=onnx&logoColor=white)](https://onnxruntime.ai/)
 [![Solver](https://img.shields.io/badge/Solver-Pymoo%20NSGA--III%20%26%20SB3%20MaskablePPO-blueviolet.svg?style=flat-square)](https://pymoo.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
-[![Artifact Evaluation](https://img.shields.io/badge/Artifact%20Evaluation-Passed%20(100%25%20Reproducible)-success.svg?style=flat-square)](#reproducibility-guide)
+[![Tests](https://img.shields.io/badge/Tests-Passing%20(Pytest%20Suite)-success.svg?style=flat-square)](#reproducibility-guide)
 
 ---
 
@@ -16,7 +16,7 @@ This repository hosts the official source code, hardware-in-the-loop (HIL) telem
 
 ### The Industrial Problem
 Modern discrete manufacturing systems (such as CNC machining centers) face multifaceted operating uncertainties:
-1. **Tool Degradation & Micro-Stoppages:** Cutting tool flank wear progresses non-linearly, causing cutting forces, friction, and tool temperatures to rise. This escalates active machining power by up to $+35\%$ and drastically raises tool breakage risks if Condition-Based Maintenance (CBM) is misjudged.
+1. **Tool Degradation & Micro-Stoppages:** Cutting tool flank wear progresses non-linearly, causing cutting forces, friction, and tool temperatures to rise. This escalates active machining power by up to $+28\%$ and drastically raises tool breakage risks if Condition-Based Maintenance (CBM) is misjudged.
 2. **Volatile Energy Economics:** Industrial Time-of-Use (TOU) electricity pricing imposes steep peak-hour tariffs, necessitating intelligent load shifting and speed-scaling ($s \in \{1, 2, 3\}$).
 3. **Latency & Computational Bottlenecks:** Centralized Cloud meta-heuristics (e.g., NSGA-III) require $4.24 \pm 0.03\,\text{s}$ on Mk01 ($14.97\,\text{s}$ on Mk03) to compute global Pareto schedules, rendering them incapable of reacting to sub-second shop-floor disruptions. Conversely, pure Edge reactive heuristics or dispatching rules suffer from localized myopia, degrading global factory efficiency ($C_{\max}$, tardiness).
 
@@ -39,7 +39,7 @@ flowchart TD
         direction TB
         E1["Edge Digital Twin Node<br/>(ONNX Runtime CPU Inference: 0.0132 ms)"] -->|Speed & Dispatch Actions| E2["GRBL Real-Time CNC Controller<br/>(Overrides: 100%, 125%, 150%)"]
         E3["CDI Calculation Engine<br/>(Shift-Normalized Makespan + Energy Drift)"] -->|Event Trigger: CDI > 0.12| C2
-        E4["Dual-Sensor Feature Fusion & Estimator<br/>(INA226 Power + ADXL345 Vibration)"] -->|Wear Estimate: R^2 = 0.9989| E1
+        E4["Dual-Sensor Feature Fusion & Estimator<br/>(INA226 Power + ADXL345 Vibration)"] -->|Wear Estimate: R^2 = 0.9984 (active) / 0.9951 (full)| E1
         E4 --> E3
     end
 
@@ -62,9 +62,9 @@ All metrics reported below strictly reflect audited experimental runs across 15 
 | Category | Audited Metric | Empirical Observation & Contrast | Impact / Advantage |
 | :--- | :--- | :--- | :--- |
 | **Inference Latency** | **$0.0132\,\text{ms}$** | Edge ONNX forward policy inference ($0.0132 \pm 0.0013\,\text{ms}$; $0.1506 \pm 0.0064\,\text{ms}$ full decision step) vs. Cloud NSGA-III ($4.24 \pm 0.03\,\text{s}$) | **$\sim 2.81 \times 10^4 \times$ (per-step) / $\sim 3.20 \times 10^5 \times$ (forward) speedup** over Cloud solver; enables hard real-time dispatching. |
-| **Reliability & Breakdowns** | **$0.00$ Failures** | $0.00$ breakdowns across all 5 Brandimarte benchmarks (Mk01–Mk05) vs. $0.33 - 12.67$ (open-loop metaheuristics) and $0.80 - 7.60$ (wear-blind Variant 1) | Eliminates catastrophic tool breakage through closed-loop sensing ($R^2 = 0.9989$). |
+| **Reliability & Breakdowns** | **$0.00$ Failures** | $0.00$ breakdowns across all 5 Brandimarte benchmarks (Mk01–Mk05) vs. $0.33 - 12.67$ (open-loop metaheuristics) and $0.80 - 7.60$ (wear-blind Variant 1) | Eliminates catastrophic tool breakage through closed-loop sensing ($R^2 = 0.9984$ active cutting / $0.9951$ full 60s profile). |
 | **Energy & Cost Savings** | **$30.95\%$ Reduction** | SSR-actuated standby mode reduces TOU electricity cost from $\$20.106$ to $\$13.883$ on Mk03 ($-30.95\%$ reduction, saving $\$6.223$ per shift; or $+44.82\%$ cost penalty if omitted) | Eliminates parasitic idling power during inter-operational waiting times. |
-| **Pareto Quality** | **$\overline{\text{HV}} = 0.4695$** | Proposed DT achieves mean $\overline{\text{HV}}=0.4695$ and $\overline{\text{IGD}}=0.3796$ across all instances (Mk01–Mk05) | Dominates open-loop metaheuristics on complex instances ($p_{\text{holm}} \le 0.0013$) and matches Right-Shift on small scales with $0.00$ failures. |
+| **Pareto Quality** | **$\overline{\text{HV}} = 0.4695$** | Proposed DT achieves mean $\overline{\text{HV}}=0.4695$ and $\overline{\text{IGD}}=0.3796$ across all instances (Mk01–Mk05) with $0.00$ breakdowns | Statistically outperforms all 4 open-loop metaheuristics on Mk05 ($p_{\text{holm}} \le 0.0011$) and beats NSGA-III/NSGA-II on Mk03; saves $9.28\%$ TOU cost on Mk05 vs. Right-Shift with zero failures. |
 
 ---
 
@@ -79,29 +79,46 @@ $$\min \mathbf{F} = [f_1, f_2, f_3]$$
    $$C_{\max} = \max_{j \in J} C_j$$
 
 2. **Total TOU Electricity Cost ($f_2$):**
-   $$f_2 = \sum_{t=0}^{C_{\max}} C_{\text{TOU}}(t) \cdot P_{\text{total}}(t) \cdot \Delta t$$
-   where $C_{\text{TOU}}(t)$ is the dynamic tariff (Valley: $\$0.08/\text{kWh}$, Regular: $\$0.15/\text{kWh}$, Peak: $\$0.28/\text{kWh}$), and $P_{\text{total}}(t) = \sum_{m \in M} P_m(t)$.
+   $$f_2 = \sum_{t=0}^{C_{\max}} C_{\text{TOU}}(t) \cdot P_{\text{total}}(t) \cdot \frac{\Delta t}{60} + \lambda_{\text{peak}} \sum_{t=0}^{C_{\max}} \max\left(0, P_{\text{total}}(t) - P_{\text{limit}}\right) \cdot \frac{\Delta t}{60}$$
+   where $C_{\text{TOU}}(t)$ is the cyclic three-tier TOU tariff over repeating 100-minute manufacturing shifts:
+   - **Off-Peak** $[0, 25)\,\text{min}$: $\$0.06/\text{kWh}$
+   - **On-Peak** $[25, 60)\,\text{min}$: $\$0.20/\text{kWh}$
+   - **Mid-Peak** $[60, 100)\,\text{min}$: $\$0.12/\text{kWh}$
+   $P_{\text{total}}(t) = \sum_{k=1}^m P_k(t)$ is total plant power, $\lambda_{\text{peak}} = \$0.30/\text{kWh}$ is the peak demand excess surcharge, and $P_{\text{limit}} \in \{22.0, 24.0, 32.0, 30.0, 16.0\}\,\text{kW}$ is the instance-specific power ceiling across Brandimarte benchmarks `Mk01`–`Mk05`.
 
 3. **Total Weighted Tardiness ($f_3 = \text{TWT}$):**
    $$\text{TWT} = \sum_{j \in J} w_j \cdot \max(0, C_j - d_j)$$
    where $w_j$ represents job priority weight and $d_j$ is the due date.
 
-### 3.2 Dynamic Cutting Power Drift Model
-Physical flank wear ($w$) degrades cutting edge sharpness, increasing cutting friction and spindle load:
+### 3.2 Dynamic Cutting Power Drift & Non-Linear Tool Deterioration Model
+Physical flank wear $w_k(t)$ progresses non-linearly under the extended Taylor tool wear model across discrete cutting speeds $s \in \{1, 2, 3\}$ ($v_1 = 1.0, v_2 = 1.25, v_3 = 1.50$):
 
-$$P_{\text{cutting}}(v, w) = P_0(v) \cdot \left( 1 + \alpha_w \cdot \frac{w(t)}{w_{\max}} \right)$$
+$$\Delta w = \eta_k \cdot (v_s)^{\beta_k} \cdot t_{\text{proc}} \cdot \xi_{\text{noise}}$$
 
-where $P_0(v) = k_p \cdot v^2$ represents base cutting power at speed level $v \in \{1.0, 1.25, 1.50\}$, $\alpha_w = 0.35$ accounts for up to $+35\%$ power drift at terminal tool wear ($w_{\max} = 100\,\mu\text{m}$), and $w(t)$ is estimated continuously by the dual-sensor fusion model.
+where $\eta_k \in [0.95, 1.35]\,\mu\text{m/min}$ is the base wear rate, $\beta_k \in [2.20, 2.70]$ is the machine-specific Taylor velocity exponent across CNC workstations `M1`–`M8` in `config/system_params.yaml`, and $\xi_{\text{noise}} \sim \mathcal{N}(1.0, 0.03^2)$ captures metallurgical stochasticity.
+
+As the cutting edge dulls, cutting friction and spindle loads increase active machining power:
+
+$$P_{\text{cutting}, k}(v, w) = P_{\text{idle}, k} + P_{\text{cut\_base}, k} \cdot v^{\alpha_p} \cdot \left( 1 + \gamma_k \cdot \frac{w_k(t)}{w_{\max}} \right)$$
+
+where $\alpha_p = 1.5$ is the cutting speed power-law scaling exponent, $\gamma_k \in [0.20, 0.28]$ (plant mean $0.25$) accounts for up to $+28\%$ power drift at terminal tool wear ($w_{\max} = 100.0\,\mu\text{m}$), and $w_k(t)$ is estimated continuously by the dual-sensor EKF fusion model.
 
 ### 3.3 Standby Power Transition & Break-Even Time ($T_{\text{BE}}$)
 To eliminate energy waste during inter-operational idle intervals, machines transition to an ultra-low power standby state via opto-isolated solid-state relays (SSR) if the expected waiting duration $\Delta t$ exceeds the physical break-even threshold:
 
-$$T_{\text{BE}} = \frac{E_{\text{trans}}}{P_{\text{idle}} - P_{\text{standby}}}$$
+$$T_{\text{BE}} = \frac{E_{\text{on\_off}}}{P_{\text{idle}} - P_{\text{standby}}}$$
 
-- **Idle Power:** $P_{\text{idle}} = 15.6\,\text{W}$
-- **Standby Power:** $P_{\text{standby}} = 3.6\,\text{W}$
-- **State Transition Energy:** $E_{\text{trans}} = 0.62\,\text{Wh}$ ($2232\,\text{J}$)
-- **Resulting Break-Even Threshold:** $T_{\text{BE}} \approx 3.1\,\text{min}$. If idle interval $\Delta t \le T_{\text{BE}}$, the machine stays in idle to avoid transition losses; otherwise, SSR switches to standby.
+The framework characterizes break-even economics across two complementary physical scales:
+1. **Industrial Shop-Floor CNC Centers (`M1`–`M8` in `config/system_params.yaml`):**
+   - **Idle Power:** $P_{\text{idle}, k} \in [0.85, 1.50]\,\text{kW}$ ($1.00 - 1.50\,\text{kW}$ on heavy machining centers).
+   - **Standby Power:** $P_{\text{stdby}, k} \in [0.15, 0.25]\,\text{kW}$ (auxiliary electronics and edge sensing retained).
+   - **Transition / Restart Energy:** $E_{\text{on\_off}, k} \in [0.12, 0.22]\,\text{kWh}$ with warmup duration $t_{\text{warmup}} \in [2.0, 4.0]\,\text{min}$ and tool replacement duration $t_{\text{pm}} = 10.0\,\text{min}$ ($5.0\,\text{min}$ base).
+   - **Break-Even Threshold Range:** $T_{\text{BE}, k} \in [8.36, 10.54]\,\text{min}$ (e.g., $9.00\,\text{min}$ on M1, $8.64\,\text{min}$ on M2, $10.54\,\text{min}$ on M3).
+2. **Physical Breadboard Hardware Proxy (24V CNC Mechatronics):**
+   - **Idle Power:** $P_{\text{idle}} = 15.6\,\text{W}$
+   - **Standby Power:** $P_{\text{standby}} = 3.6\,\text{W}$
+   - **Transition Energy:** $E_{\text{trans}} = 0.62\,\text{Wh}$ ($2232\,\text{J}$)
+   - **Resulting Break-Even Threshold:** $T_{\text{BE}} \approx 3.1\,\text{min}$. If idle interval $\Delta t \le T_{\text{BE}}$, the machine stays in idle to avoid transition energy and wear penalties; otherwise, SSR switches to standby.
 
 ### 3.4 Shift-Normalized Cumulative Disturbance Index ($\text{CDI}(t)$)
 To prevent network saturation and avoid computational re-optimization overhead from transient noise, the edge twin tracks deviation normalized against the shift planned baseline:
@@ -157,7 +174,7 @@ cloud_edge_fjsp_dt/
 │   ├── mqtt_broker.py               # Embedded local MQTT broker for headless testing
 │   ├── mqtt_schemas.py              # Telemetry & control JSON schemas
 │   └── stat_metrics.py              # HV, IGD, Wilcoxon test, Cliff's Delta, Holm-Bonferroni
-├── tests/                           # Complete verification and evaluation suite (107 tests)
+├── tests/                           # Complete verification and evaluation suite (143 tests)
 │   ├── test_task5_6b_stats_and_ablation.py # Multi-seed variance, Cliff's delta & ablation
 │   ├── test_task5_5d_final_audit.py # Master verification of 7-point data consistency
 │   ├── test_task4_3_full_hil.py     # HIL closed-loop integration test
@@ -188,9 +205,9 @@ The physical twin utilizes an **ESP32 DevKitC** interfacing with industrial sens
 
 ### GRBL v1.1 Real-Time Speed Override Protocol
 Speed scaling commands chosen by the Edge ONNX policy ($s \in \{1, 2, 3\}$) are transmitted directly to the GRBL controller via real-time byte sequences:
-- **Level 1 ($s=1$, Nominal $v=1.00$):** Commands `0x90` (Feed 100%) and `0x99` (Spindle 100%).
-- **Level 2 ($s=2$, Fast $v=1.25$):** Commands `0x91` (Feed $+25\%$) and `0x9A` (Spindle $+25\%$).
-- **Level 3 ($s=3$, Maximum $v=1.50$):** Commands `0x92` (Feed $+50\%$) and `0x9B` (Spindle $+50\%$).
+- **Level 1 ($s=1$, Nominal $v=1.00$):** Reset commands `0x90` (Feed 100%) and `0x99` (Spindle 100%).
+- **Level 2 ($s=2$, Fast $v=1.25$):** Reset to 100% (`0x90`, `0x99`), followed by two `+10%` (`0x91`, `0x9A`) and five `+1%` (`0x93`, `0x9C`) steps for Feed and Spindle.
+- **Level 3 ($s=3$, Maximum $v=1.50$):** Reset to 100% (`0x90`, `0x99`), followed by five `+10%` (`0x91`, `0x9A`) steps for Feed and Spindle.
 
 ---
 
@@ -217,11 +234,11 @@ pip install -r requirements.txt
 ```
 
 ### Step 2: One-Click Test Suite & Data Audit Verification
-To run all 94 automated verification tests and check numerical consistency against the master audit protocol:
+To run all 143 automated verification tests and check numerical consistency against the master audit protocol:
 ```bash
 pytest -q
 ```
-*Expected result:* `94 passed in ~12.2s`.
+*Expected result:* `143 passed in ~24s`.
 
 ### Step 3: Reproduce Key Experiments
 ```bash
@@ -331,13 +348,13 @@ Quantifying the isolated contribution of each architectural component under cycl
 |  | Variant 4 (w/o Cloud Guidance) | Pure local edge dispatching without Cloud global macro optimization schedule | $438.62 \pm 44.32$ (-5.2%) | \$26.469 $\pm$ 1.338 (**+90.7%**) | $5093.45 \pm 591.89$ (+10.2%) | **6.27** |
 #### Key Component Insights from Ablation Study:
 1. **Scale-Dependent Behavior of Variant 1 (w/o Wear Feedback):**
-   - On **Mk01** (55 operations): Variant 1 ($92.85\,	ext{min}$, $1.80$ breakdowns) performs strictly worse than open-loop NSGA-III ($83.64\,	ext{min}$, $0.87$ breakdowns). Because the edge agent lacks sensor feedback, it incorrectly infers that tools remain fresh under nominal Taylor wear, erroneously cancels scheduled preventive maintenance, and accelerates machining to $s=3$ (the *Blind Closed-Loop Hazard*).
-   - On **Mk03** (150 operations): Open-loop NSGA-III completely collapses under cascading disruption ($514.37\,	ext{min}$, $9.67$ breakdowns). Here, while Variant 1 still suffers $9.00$ tool failures due to sensor blindness (substantially worse than the $0.00$ breakdowns of Full Proposed), its closed-loop job re-dispatching when precedence lags occur succeeds in averting plant-wide gridlock, retaining a makespan of $441.80\,	ext{min}$ ($< 514.37\,	ext{min}$).
+   - On **Mk01** (55 operations): Variant 1 suffers **$0.80$ breakdowns** (vs. $0.00$ for Full Proposed) and inflates TWT by $+13.24\%$ ($373.68 \pm 129.18\,\text{min}$ vs $329.99 \pm 60.47\,\text{min}$). Because the edge agent lacks live sensor feedback, it assumes nominal tool wear, delays preventive maintenance, and risks severe tooling damage under unmodeled hardness surges (the *Blind Closed-Loop Hazard*).
+   - On **Mk03** (150 operations): Under heavy cumulative wear, Variant 1 experiences **$7.60$ breakdowns** per run (compared to $0.00$ for Full Proposed and $9.67$ for open-loop NSGA-III), driving makespan to $511.54 \pm 29.06\,\text{min}$ ($+10.56\%$) and TWT to $5226.80 \pm 801.80\,\text{min}$ ($+13.09\%$).
 2. **Trade-Off Analysis of Variant 2 (Fixed Speed $s=2$):**
-   - Locking spindle cutting speeds to nominal level $s=2$ is an architectural trade-off rather than a monotonic regression: it slightly shortens Makespan ($-5.39\%$ on Mk01, $-4.48\%$ on Mk03) and TWT ($-14.42\%$ and $-11.44\%$) because machines never decelerate to conservative speed $s=1$.
-   - However, Variant 2 loses the flexibility to dynamically avoid peak-tariff windows ($[25..60]\,	ext{min}$ at $\$0.20/	ext{kWh}$), which increases TOU electricity cost by **$+4.71\%$** on Mk01 and **$+5.01\%$** on Mk03.
+   - Locking spindle cutting speeds to nominal level $s=2$ represents an operational trade-off rather than an unmitigated defect: it shortens Makespan ($-7.75\%$ on Mk01 from $86.00$ to $79.34\,\text{min}$, $-10.60\%$ on Mk03 from $462.69$ to $413.64\,\text{min}$) and reduces TWT ($-10.89\%$ and $-18.85\%$) because machines never decelerate to conservative speed $s=1$.
+   - However, Variant 2 loses the agility to dynamically throttle cutting during expensive On-Peak tariff windows ($[25..60]\,\text{min}$ at $\$0.20/\text{kWh}$), which increases TOU electricity cost by **$+8.53\%$** on Mk01 ($\$3.031 \pm 0.357$ vs $\$2.793 \pm 0.183$) and **$+1.80\%$** on Mk03 ($\$14.133 \pm 0.969$ vs $\$13.883 \pm 0.677$).
 3. **Standby Actuation (Variant 3):**
-   - Preserves schedule execution time ($0.0\%$ makespan change) while SSR switching saves **$+16.37\%$** TOU cost on Mk01 and **$+31.27\%$** on Mk03 by eliminating idle power during starvation buffers.
+   - Eliminating SSR standby gating forces machines to draw continuous idling power during starvation buffers, increasing TOU electricity cost by **$+15.44\%$** on Mk01 ($\$3.224$ vs $\$2.793$) and **$+44.82\%$** on Mk03 ($\$20.106$ vs $\$13.883$). Conversely, activating SSR standby gating achieves a **$13.37\%$** cost reduction on Mk01 (saving $\$0.431$ per shift) and a **$30.95\%$** reduction on Mk03 (saving $\$6.223$ per shift).
 
 ![Ablation Study and Sensitivity Analysis](tests/phase5_ablation_and_sensitivity.png)
 
@@ -500,29 +517,29 @@ Comparison of the proposed collaborative framework against recent state-of-the-a
 To maintain objective academic rigor and transparent reproducibility, we explicitly highlight the competitive baseline dynamics, trade-offs, operational boundaries, and physical testbed constraints:
 
 1. **Honest Assessment of `Right-Shift Rescheduling`:**
-   - *A Highly Competitive Reactive Baseline:* When inheriting high-quality global Pareto baseline schedules from Cloud NSGA-III, simple Right-Shift rescheduling serves as an exceptionally formidable baseline. Under stochastic wear drift, Right-Shift incurs minimal tool breakdowns ($0.00 - 0.07$ failures), achieves performance statistically indistinguishable from the Proposed DT on small problem instances (`Mk01`, `Mk02`, $p_{\text{holm}} \ge 0.2190$), and even secures a higher Hypervolume on bottleneck few-machine instances (`Mk05`: $\text{HV}=0.5716$ vs $0.4474$, $p_{\text{holm}} = 0.0067$).
-   - *The Decisive Advantage of Proposed DT:* The true superiority of the Proposed DT over Right-Shift stems from active cutting speed-scaling ($s \in \{1, 2, 3\}$) and opportunistic job re-routing triggered when $\text{CDI}(t) > \theta_{\text{th}}$. Proposed DT dramatically slashes Total Weighted Tardiness ($-40.0\%$ on Mk01, $-21.9\%$ on Mk03, $-21.5\%$ on Mk04), achieves statistically superior Inverted Generational Distance (IGD) across medium and large shops (`Mk03`, `Mk04`, `Mk05`, $p_{\text{holm}} \le 0.0023$), and exhibits comprehensive multi-objective dominance on large-scale multi-machine shops (`Mk03`, `Mk04`, Cliff\'s $\delta = +0.92 \dots +1.00$).
+   - *A Highly Competitive Reactive Baseline:* When inheriting high-quality global Pareto baseline schedules from Cloud NSGA-III, simple Right-Shift rescheduling serves as an exceptionally formidable reactive baseline. On small problem instance `Mk01`, no statistically significant difference in Hypervolume was detected between Right-Shift and the Proposed DT ($p_{\text{holm}} = 0.0747$). On `Mk02` ($p_{\text{holm}} = 0.0015$), `Mk03` ($p_{\text{holm}} = 0.0009$), `Mk04` ($p_{\text{holm}} = 0.0214$), and `Mk05` ($p_{\text{holm}} = 0.0009$), Right-Shift secures higher Hypervolume by strictly preserving the global assignment topology. Under stochastic wear drift, Right-Shift incurs minor tool breakdowns ($0.07$ on Mk03 and Mk05).
+   - *The Decisive Advantage of Proposed DT:* The true operational superiority of the Proposed DT over Right-Shift stems from active cutting speed-scaling ($s \in \{1, 2, 3\}$), dynamic tool wear tracking via EKF, and CDI-triggered Cloud re-synchronization. Proposed DT completely eliminates tool breakdowns ($0.00$ failures across all 5 benchmark instances), achieves the benchmark lowest TOU electricity cost on bottleneck `Mk05` ($\$11.198 \pm 0.539$ vs $\$12.343 \pm 0.783$ for Right-Shift, saving $9.28\%$), and provides hard real-time speed adjustments to prevent peak-tariff penalties.
 
 2. **Objective Analysis of `Standalone Edge PPO (No Cloud Prior)`:**
-   - *Local Reactivity on Dense Benchmarks:* On dense instances with tight deadlines (`Mk03–Mk05`), Standalone Edge PPO achieves lower Total Weighted Tardiness (TWT) than the Proposed DT ($2056.8\,\text{min}$ vs $2816.7\,\text{min}$ on Mk03; $864.2\,\text{min}$ vs $1178.0\,\text{min}$ on Mk04; $3501.6\,\text{min}$ vs $5632.1\,\text{min}$ on Mk05) and a shorter makespan on Mk05 ($337.53\,\text{min}$ vs $390.05\,\text{min}$). This behavior emerges from myopic greedy reflex actions prioritizing jobs with the smallest urgency slack.
-   - *The Penalty of Missing Global Guidance:* Lacking the global combinatorial perspective of Cloud NSGA-III (No Cloud Prior), Standalone Edge PPO accelerates machining speeds indiscriminately through expensive On-Peak tariff windows ($[25..60]\,\text{min}$ at $\$0.20/\text{kWh}$) and creates localized machine bottlenecks. Consequently, it suffers frequent tool breakdowns ($0.80 - 4.40$ failures per episode) and inflates TOU electricity costs by **$+18.6\%$ to $+51.5\%$** ($+22.8\%$ on Mk03, $+51.5\%$ on Mk04, $+35.1\%$ on Mk05) compared to the Proposed DT.
+   - *Local Reactivity on Dense Benchmarks:* On dense instances with tight deadlines (`Mk03–Mk05`), Standalone Edge PPO operates on pure local urgency slack reflex, occasionally cutting makespan (e.g. $344.81 \pm 25.02\,\text{min}$ vs $408.76 \pm 29.48\,\text{min}$ on Mk05; $151.79\,\text{min}$ vs $161.25\,\text{min}$ on Mk04) or TWT ($4896.0\,\text{min}$ vs $5395.5\,\text{min}$ on Mk05).
+   - *The Penalty of Missing Global Guidance:* Lacking the global combinatorial perspective of Cloud NSGA-III (No Cloud Prior), Standalone Edge PPO accelerates machining speeds indiscriminately through expensive On-Peak tariff windows ($[25..60]\,\text{min}$ at $\$0.20/\text{kWh}$) and creates localized machine bottlenecks. On Mk01, makespan degrades by $+28.4\%$ ($110.42\,\text{min}$ vs $86.00\,\text{min}$) and TWT doubles to $673.6\,\text{min}$ vs $330.0\,\text{min}$ ($+104.1\%$). Across all instances, it suffers frequent tool breakdowns ($0.80 - 6.27$ failures per episode) and inflates TOU electricity costs by **$+16.2\%$ to $+90.7\%$** ($+16.2\%$ on Mk01, $+90.7\%$ on Mk03 from $\$13.883$ to $\$26.469$, $+47.6\%$ on Mk04 from $\$4.632$ to $\$6.835$, $+38.0\%$ on Mk05 from $\$11.198$ to $\$15.457$) compared to the Proposed DT.
 
 3. **Discrepancy Between Hypervolume (HV) and IGD on Benchmark `Mk05`:**
    - *The Bottleneck Machine Dilemma:* `Mk05` poses an extreme structural bottleneck ($15$ jobs comprising $106$ operations allocated across only $4$ machines, averaging $26.5$ operations per machine).
-   - *Trade-off Mechanism:* In this constrained topology, the Proposed DT prioritizes absolute physical tool preservation ($0.00$ tool breakdowns) and aggressive TOU cost minimization (achieving the lowest electricity bill across all methods: $\$11.722 \pm 0.150$ vs $\$12.343 \pm 0.783$ for Right-Shift). Decelerating to $s=1$ during peak tariff hours to avoid demand penalties unavoidably extends completion times for queued jobs, resulting in higher TWT and a compressed Hypervolume along the tardiness axis.
-   - *Pareto Convergence:* Crucially, while boundary solutions are truncated, the non-dominated solutions generated by Proposed DT converge exceptionally close to the true reference front center, achieving the best global Inverted Generational Distance ($\text{IGD} = 0.3826 \pm 0.0063$, statistically beating Right-Shift at $p_{\text{holm}} = 0.0004$).
+   - *Trade-off Mechanism:* In this constrained topology, the Proposed DT prioritizes absolute physical tool preservation ($0.00$ tool breakdowns vs $9.20$ for NSGA-III, $9.87$ for MOEA-D, and $12.67$ for RVEA) and aggressive TOU cost minimization (achieving the lowest electricity bill across all methods: $\$11.198 \pm 0.539$ vs $\$12.343 \pm 0.783$ for Right-Shift, saving $9.28\%$). Decelerating to $s=1$ during peak tariff hours to avoid demand penalties unavoidably extends completion times for queued jobs, resulting in higher TWT ($5395.5 \pm 800.5\,\text{min}$) and a compressed Hypervolume along the tardiness axis.
+   - *Pareto Convergence:* Crucially, while boundary solutions are truncated, the non-dominated solutions generated by Proposed DT converge exceptionally close to the true reference front center, achieving $\text{IGD} = 0.3619 \pm 0.0715$, outperforming open-loop metaheuristics (NSGA-III: $0.4873 \pm 0.1248$, MOEA-D: $0.6129 \pm 0.1798$, RVEA: $0.5436 \pm 0.0893$).
 
 4. **Small-Scale vs. Large-Scale Trade-offs:**
-   - *Small Problem Regimes (Mk01, Mk02):* Open-loop evolutionary algorithms (`MOEA-D`, `NSGA-III`) achieve competitive makespans (~$66 - 83$ min) on small problem sizes because they omit preventive maintenance interventions. However, under physical tool wear drift, this incurs tool breakdowns ($0.33 - 0.87$ breakdowns per episode).
-   - *Large Industrial Regimes (Mk03, Mk04):* On dense problems with long machining horizons (e.g. Mk03 with 150 operations spanning ~400 minutes), open-loop methods collapse completely, suffering $9.67 - 12.00$ tool breakdowns. Tool breakage forces unscheduled emergency stops, workpiece scrapping, and schedule disruption. The Proposed Cloud-Edge DT completely eliminates breakdowns ($0.00$), leading to statistically significant dominance in makespan, TOU cost, and multi-objective Pareto metrics ($p_{\text{holm}} < 0.001$, Cliff\'s $\delta = +1.00$).
+   - *Small Problem Regimes (Mk01, Mk02):* Open-loop evolutionary algorithms (`MOEA-D`, `NSGA-III`, `NSGA-II`, `RVEA`) omit dynamic condition-based tool replacements, suffering $0.33 - 0.87$ tool breakdowns per run even on small jobs.
+   - *Large Industrial Regimes (Mk03–Mk05):* In environments with long machining horizons and bottleneck machines, open-loop methods collapse under cumulative tool wear, suffering up to $9.67$ breakdowns on Mk03 and $12.67$ breakdowns on Mk05. In contrast, Proposed DT eliminates all breakdowns ($0.00$ failures across all 5 benchmark instances), achieving statistically significant Hypervolume superiority over all 4 open-loop metaheuristics on Mk05 ($p_{\text{holm}} \le 0.0011$) and beating NSGA-III ($p_{\text{holm}} = 0.0214$) and NSGA-II ($p_{\text{holm}} = 0.0410$) on Mk03.
 
 5. **Scale-Dependent Hazard of Variant 1 (w/o Wear Feedback):**
-   - On `Mk01` ($55$ operations): Variant 1 ($92.85\,\text{min}$, $1.80$ breakdowns) performs worse than static open-loop NSGA-III ($83.64\,\text{min}$, $0.87$ breakdowns). The sensor-blind AI agent misjudges wear progression, cancels scheduled PM, and accelerates to $s=3$, demonstrating the acute danger of *Blind Closed-Loop Control*.
-   - On `Mk03` ($150$ operations): Static open-loop NSGA-III collapses to $514.37\,\text{min}$ ($9.67$ breakdowns). Variant 1, while still suffering $9.00$ tool breakdowns due to sensor blindness, leverages closed-loop re-dispatching when precedence lags accumulate, successfully holding makespan at $441.80\,\text{min}$ ($< 514.37\,\text{min}$).
+   - On `Mk01` ($55$ operations): Variant 1 experiences $0.80$ breakdowns and an inflated TWT of $373.68 \pm 129.18\,\text{min}$ ($+13.24\%$ vs $329.99\,\text{min}$ for Full Proposed). Sensor-blind execution delays preventive maintenance, demonstrating the acute danger of *Blind Closed-Loop Control*.
+   - On `Mk03` ($150$ operations): Under heavy cumulative wear, Variant 1 suffers $7.60$ breakdowns per run (vs. $0.00$ for Full Proposed), driving makespan to $511.54 \pm 29.06\,\text{min}$ ($+10.56\%$) and TWT to $5226.80 \pm 801.80\,\text{min}$ ($+13.09\%$).
 
 6. **The Nature of Variant 2 as an Operational Trade-Off:**
-   - Locking cutting speed to $s=2$ is an operational design choice rather than an unmitigated defect: it yields modest gains in makespan ($-5.39\%$ on Mk01, $-4.48\%$ on Mk03) and TWT ($-14.42\%$ and $-11.44\%$) because machines never drop to conservative speed $s=1$.
-   - However, it loses the agile capability to throttle cutting during high-tariff windows, increasing TOU electricity costs by $+4.71\%$ and $+5.01\%$.
+   - Locking cutting speed to nominal $s=2$ is an operational design choice rather than an unmitigated defect: it yields modest reductions in makespan ($-7.75\%$ on Mk01 from $86.00$ to $79.34\,\text{min}$, $-10.60\%$ on Mk03 from $462.69$ to $413.64\,\text{min}$) and TWT ($-10.89\%$ on Mk01, $-18.85\%$ on Mk03) because machines never drop to conservative speed $s=1$.
+   - However, it loses the agile capability to throttle cutting during high-tariff windows ($[25..60]\,\text{min}$ at $\$0.20/\text{kWh}$), increasing TOU electricity costs by $+8.53\%$ on Mk01 (from $\$2.793$ to $\$3.031$) and $+1.80\%$ on Mk03 (from $\$13.883$ to $\$14.133$).
 
 7. **Physical Proof-of-Concept Hardware Limits:**
    - The physical testbed operates as a hardware-in-the-loop laboratory proof-of-concept using an ESP32 embedded node, INA226 power monitor, ADXL345 accelerometer, and a 24V DC CNC spindle proxy.

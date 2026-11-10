@@ -90,22 +90,28 @@ def test_grbl_controller_real_time_speed_overrides_and_ssr():
     assert ov1["sent_bytes"] == [0x90, 0x99]
     assert ov1["ssr_cmd"] is None
 
-    # 2. Speed Level s = 2 (v = 1.25, +25%)
+    # 2. Speed Level s = 2 (v = 1.25, 125%: reset to 100%, +2x10%, +5x1% -> 16 bytes)
     ov2 = controller.set_speed_override(2)
     assert ov2["speed_level"] == 2
     assert ov2["speed_factor"] == 1.25
     assert ov2["feed_override_pct"] == 125
     assert ov2["spindle_override_pct"] == 125
-    assert ov2["sent_bytes"] == [0x91, 0x9A]
+    assert ov2["sent_bytes"] == [
+        0x90, 0x91, 0x91, 0x93, 0x93, 0x93, 0x93, 0x93,
+        0x99, 0x9A, 0x9A, 0x9C, 0x9C, 0x9C, 0x9C, 0x9C,
+    ]
     assert ov2["ssr_cmd"] is None
 
-    # 3. Speed Level s = 3 (v = 1.50, +50% + SSR CMD:CUTTING)
+    # 3. Speed Level s = 3 (v = 1.50, 150%: reset to 100%, +5x10% -> 12 bytes + SSR CMD:CUTTING)
     ov3 = controller.set_speed_override(3)
     assert ov3["speed_level"] == 3
     assert ov3["speed_factor"] == 1.50
     assert ov3["feed_override_pct"] == 150
     assert ov3["spindle_override_pct"] == 150
-    assert ov3["sent_bytes"] == [0x91, 0x9A]
+    assert ov3["sent_bytes"] == [
+        0x90, 0x91, 0x91, 0x91, 0x91, 0x91,
+        0x99, 0x9A, 0x9A, 0x9A, 0x9A, 0x9A,
+    ]
     assert ov3["ssr_cmd"] == "CMD:CUTTING"
     assert controller.current_state == "CUTTING"
 

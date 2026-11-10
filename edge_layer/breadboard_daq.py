@@ -254,6 +254,8 @@ class BreadboardDAQInterface:
                 "p_filt_w": 0.0,
                 "vib_rms_g": 0.0,
                 "ssr_state": "OFF",
+                "sensor_ok": True,
+                "sim_fallback": False,
             }
 
         if self.ssr_state == "STANDBY":
@@ -274,6 +276,8 @@ class BreadboardDAQInterface:
                 "p_filt_w": round(float(p_filt), 1),
                 "vib_rms_g": 0.01,
                 "ssr_state": "STANDBY",
+                "sensor_ok": True,
+                "sim_fallback": False,
             }
 
         if self.ssr_state == "IDLE":
@@ -297,6 +301,8 @@ class BreadboardDAQInterface:
                 "p_filt_w": round(float(p_filt), 1),
                 "vib_rms_g": round(float(vib_rms), 2),
                 "ssr_state": "IDLE",
+                "sensor_ok": True,
+                "sim_fallback": False,
             }
 
         # CUTTING State
@@ -348,6 +354,8 @@ class BreadboardDAQInterface:
             "p_filt_w": round(float(p_filt), 1),
             "vib_rms_g": round(float(vib_rms), 2),
             "ssr_state": "CUTTING",
+            "sensor_ok": True,
+            "sim_fallback": False,
         }
 
     def close(self):

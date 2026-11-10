@@ -44,6 +44,12 @@
 #define TELEMETRY_INTERVAL_MS 100      // 10 Hz telemetry (100 ms)
 #define VIB_WINDOW_SIZE     20         // 20 samples = 100 ms at 200 Hz
 
+// Hardware Fault Handling & Simulation Fallback Gate
+// On real physical machinery, silent fallback to simulated values is prohibited (ALLOW_SIM_FALLBACK = 0).
+#ifndef ALLOW_SIM_FALLBACK
+#define ALLOW_SIM_FALLBACK 0
+#endif
+
 // ----------------------------------------------------------------------------
 // Machine States
 // ----------------------------------------------------------------------------
@@ -54,7 +60,8 @@ enum MachineState {
     STATE_CUTTING
 };
 
-volatile MachineState current_state = STATE_IDLE;
+// Fail-Safe Boot State: Default to STATE_OFF upon power-on / hardware reset
+volatile MachineState current_state = STATE_OFF;
 
 const char* stateToString(MachineState s) {
     switch (s) {
@@ -148,6 +155,7 @@ public:
 
 // ----------------------------------------------------------------------------
 // Vibration RMS Calculator (20-sample sliding window = 100ms at 200Hz)
+// with 1st-order high-pass / Exponential Moving Average gravity tracker (alpha_dc = 0.02)
 // ----------------------------------------------------------------------------
 class VibrationRMSCalculator {
 private:
@@ -156,8 +164,15 @@ private:
     uint8_t _count;
     float _sq_sum;
 
+    // Static Earth Gravity (1g DC Offset) Tracker
+    float _gx;
+    float _gy;
+    float _gz;
+    bool _g_init;
+
 public:
-    VibrationRMSCalculator() : _head(0), _count(0), _sq_sum(0.0f) {
+    VibrationRMSCalculator() : _head(0), _count(0), _sq_sum(0.0f),
+                               _gx(0.0f), _gy(0.0f), _gz(0.0f), _g_init(false) {
         for (int i = 0; i < VIB_WINDOW_SIZE; i++) {
             _buf[i] = 0.0f;
         }
@@ -167,13 +182,33 @@ public:
         _head = 0;
         _count = 0;
         _sq_sum = 0.0f;
+        _gx = 0.0f;
+        _gy = 0.0f;
+        _gz = 0.0f;
+        _g_init = false;
         for (int i = 0; i < VIB_WINDOW_SIZE; i++) {
             _buf[i] = 0.0f;
         }
     }
 
     float update(float ax, float ay, float az) {
-        float mag_sq = ax * ax + ay * ay + az * az;
+        // High-pass filtering: track static gravity components via Exponential Moving Average
+        if (!_g_init) {
+            _gx = ax;
+            _gy = ay;
+            _gz = az;
+            _g_init = true;
+        } else {
+            _gx += 0.02f * (ax - _gx);
+            _gy += 0.02f * (ay - _gy);
+            _gz += 0.02f * (az - _gz);
+        }
+
+        // Dynamic vibration components (isolated from 1g Earth gravity vector)
+        float dx = ax - _gx;
+        float dy = ay - _gy;
+        float dz = az - _gz;
+        float mag_sq = dx * dx + dy * dy + dz * dz;
 
         if (_count >= VIB_WINDOW_SIZE) {
             _sq_sum -= _buf[_head];
@@ -206,6 +241,7 @@ float latest_i_amp = 0.0f;
 float latest_p_raw = 0.0f;
 float latest_p_filt = 0.0f;
 float latest_vib_rms = 0.0f;
+bool latest_sensor_ok = true;
 
 // ----------------------------------------------------------------------------
 // I2C Bus Recovery: Generates 9 SCL Clock Pulses and STOP Condition
@@ -287,6 +323,12 @@ bool initADXL345() {
     Wire.beginTransmission(ADXL345_I2C_ADDR);
     Wire.write(0x31);
     Wire.write(0x08); // Full resolution, +/- 2g (3.9 mg/LSB)
+    if (Wire.endTransmission() != 0) return false;
+
+    // Output Data Rate (0x2C): 200 Hz ODR (0x0B), 100 Hz Bandwidth (synchronous with 5ms loop)
+    Wire.beginTransmission(ADXL345_I2C_ADDR);
+    Wire.write(0x2C);
+    Wire.write(0x0B); // 200 Hz ODR, 100 Hz bandwidth
     if (Wire.endTransmission() != 0) return false;
 
     // Power Control (0x2D): Measurement Mode
@@ -460,10 +502,12 @@ void setup() {
     Serial.begin(115200);
     delay(200);
 
-    // Initialize Actuator GPIOs
+    // Initialize Actuator GPIOs with fail-safe boot state (OFF)
     pinMode(PIN_SSR_STANDBY, OUTPUT);
     pinMode(PIN_SSR_MAIN, OUTPUT);
-    applySSRState(STATE_IDLE); // Default initial state: IDLE
+    digitalWrite(PIN_SSR_MAIN, LOW);
+    digitalWrite(PIN_SSR_STANDBY, LOW);
+    applySSRState(STATE_OFF); // Fail-safe default initial state: OFF
 
     // Initialize I2C Bus at 400kHz
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_FREQ_HZ);
@@ -474,9 +518,10 @@ void setup() {
     adxl345_connected = initADXL345();
 
     if (!ina226_connected || !adxl345_connected) {
-        Serial.printf("[WARN] I2C Sensor Status - INA226: %s, ADXL345: %s (Fallback to Simulation)\n",
+        Serial.printf("[WARN] I2C Sensor Status - INA226: %s, ADXL345: %s (Fallback to Simulation: %s)\n",
                       ina226_connected ? "FOUND" : "NOT_FOUND",
-                      adxl345_connected ? "FOUND" : "NOT_FOUND");
+                      adxl345_connected ? "FOUND" : "NOT_FOUND",
+                      ALLOW_SIM_FALLBACK ? "ENABLED" : "DISABLED");
     }
 
     powerFilter.reset(15.6f);
@@ -515,21 +560,40 @@ void loop() {
                 recoverI2CBus();
                 i2c_consecutive_errors = 0;
             }
-            // Generate breadboard simulated data
-            generateSimulatedSensors(v_bus, i_amp, p_raw, ax, ay, az);
+            if (ALLOW_SIM_FALLBACK) {
+                // Generate breadboard simulated data
+                generateSimulatedSensors(v_bus, i_amp, p_raw, ax, ay, az);
+                float p_filt = powerFilter.update_estimate(p_raw);
+                float vib_rms = vibCalculator.update(ax, ay, az);
+
+                latest_v_bus = v_bus;
+                latest_i_amp = i_amp;
+                latest_p_raw = p_raw;
+                latest_p_filt = p_filt;
+                latest_vib_rms = vib_rms;
+            } else {
+                // Explicit Hardware Fault Trip: Turn off SSRs and flag fault
+                applySSRState(STATE_OFF);
+                latest_v_bus = 0.0f;
+                latest_i_amp = 0.0f;
+                latest_p_raw = 0.0f;
+                latest_p_filt = 0.0f;
+                latest_vib_rms = -1.0f;
+            }
         } else {
             i2c_consecutive_errors = 0;
+
+            // Apply DSP Filtering
+            float p_filt = powerFilter.update_estimate(p_raw);
+            float vib_rms = vibCalculator.update(ax, ay, az);
+
+            latest_v_bus = v_bus;
+            latest_i_amp = i_amp;
+            latest_p_raw = p_raw;
+            latest_p_filt = p_filt;
+            latest_vib_rms = vib_rms;
         }
-
-        // Apply DSP Filtering
-        float p_filt = powerFilter.update_estimate(p_raw);
-        float vib_rms = vibCalculator.update(ax, ay, az);
-
-        latest_v_bus = v_bus;
-        latest_i_amp = i_amp;
-        latest_p_raw = p_raw;
-        latest_p_filt = p_filt;
-        latest_vib_rms = vib_rms;
+        latest_sensor_ok = read_ok;
     }
 
     // ------------------------------------------------------------------------
@@ -545,8 +609,10 @@ void loop() {
         doc["i_amp"] = roundf(latest_i_amp * 100.0f) / 100.0f;
         doc["p_raw_w"] = roundf(latest_p_raw * 10.0f) / 10.0f;
         doc["p_filt_w"] = roundf(latest_p_filt * 10.0f) / 10.0f;
-        doc["vib_rms_g"] = roundf(latest_vib_rms * 100.0f) / 100.0f;
+        doc["vib_rms_g"] = (latest_vib_rms < 0.0f) ? -1.0f : (roundf(latest_vib_rms * 100.0f) / 100.0f);
         doc["ssr_state"] = stateToString(current_state);
+        doc["sensor_ok"] = latest_sensor_ok;
+        doc["sim_fallback"] = (!latest_sensor_ok && (ALLOW_SIM_FALLBACK != 0));
 
         serializeJson(doc, Serial);
         Serial.println();

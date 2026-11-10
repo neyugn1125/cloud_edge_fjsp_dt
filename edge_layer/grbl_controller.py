@@ -231,14 +231,53 @@ class GRBLHardwareController:
     # Real-Time Speed Override Control
     # ==========================================================================
 
+    def _emulator_process_override_bytes(self, override_bytes: bytes) -> None:
+        """
+        Process GRBL v1.1 real-time override bytes in emulator mode.
+        Accurately replicates GRBL override registers:
+        - 0x90: Reset feed override to 100%
+        - 0x91: Feed override +10% (clamped at 200%)
+        - 0x92: Feed override -10% (clamped at 10%)
+        - 0x93: Feed override +1% (clamped at 200%)
+        - 0x94: Feed override -1% (clamped at 10%)
+        - 0x99: Reset spindle override to 100%
+        - 0x9A: Spindle override +10% (clamped at 200%)
+        - 0x9B: Spindle override -10% (clamped at 10%)
+        - 0x9C: Spindle override +1% (clamped at 200%)
+        - 0x9D: Spindle override -1% (clamped at 10%)
+        """
+        for b in override_bytes:
+            if b == self.OVERRIDE_FEED_100:
+                self.feed_override_pct = 100
+            elif b == self.OVERRIDE_FEED_PLUS_10:
+                self.feed_override_pct = min(200, self.feed_override_pct + 10)
+            elif b == self.OVERRIDE_FEED_MINUS_10:
+                self.feed_override_pct = max(10, self.feed_override_pct - 10)
+            elif b == self.OVERRIDE_FEED_PLUS_1:
+                self.feed_override_pct = min(200, self.feed_override_pct + 1)
+            elif b == self.OVERRIDE_FEED_MINUS_1:
+                self.feed_override_pct = max(10, self.feed_override_pct - 1)
+            elif b == self.OVERRIDE_SPINDLE_100:
+                self.spindle_override_pct = 100
+            elif b == self.OVERRIDE_SPINDLE_PLUS_10:
+                self.spindle_override_pct = min(200, self.spindle_override_pct + 10)
+            elif b == self.OVERRIDE_SPINDLE_MINUS_10:
+                self.spindle_override_pct = max(10, self.spindle_override_pct - 10)
+            elif b == self.OVERRIDE_SPINDLE_PLUS_1:
+                self.spindle_override_pct = min(200, self.spindle_override_pct + 1)
+            elif b == self.OVERRIDE_SPINDLE_MINUS_1:
+                self.spindle_override_pct = max(10, self.spindle_override_pct - 1)
+
     def set_speed_override(self, speed_level: int) -> Dict[str, Any]:
         """
         Apply real-time Feed and Spindle speed overrides via GRBL v1.1 protocol.
 
         Speed Level mappings:
             - s = 1 (v = 1.00): 100% Feed & Spindle overrides (0x90, 0x99).
-            - s = 2 (v = 1.25): +25% Speed scaling via real-time override bytes (0x91, 0x9A).
-            - s = 3 (v = 1.50): +50% Speed scaling with ESP32 SSR relay switching (CMD:CUTTING).
+            - s = 2 (v = 1.25): 125% Speed scaling via reset (0x90, 0x99) followed by
+                                2x(+10%) and 5x(+1%) for both Feed and Spindle (16 bytes).
+            - s = 3 (v = 1.50): 150% Speed scaling via reset (0x90, 0x99) followed by
+                                5x(+10%) for both Feed and Spindle (12 bytes) + SSR CMD:CUTTING.
 
         Args:
             speed_level: Integer 1, 2, or 3.
@@ -257,28 +296,28 @@ class GRBLHardwareController:
         ssr_cmd: Optional[str] = None
 
         if speed_level == 1:
-            # 100% standard rate
+            # 100% standard rate: reset feed and spindle to 100%
             override_bytes = bytes([self.OVERRIDE_FEED_100, self.OVERRIDE_SPINDLE_100])
-            self.feed_override_pct = 100
-            self.spindle_override_pct = 100
         elif speed_level == 2:
-            # +25% speed scaling
-            override_bytes = bytes([self.OVERRIDE_FEED_PLUS_10, self.OVERRIDE_SPINDLE_PLUS_10])
-            self.feed_override_pct = 125
-            self.spindle_override_pct = 125
+            # 125% speed scaling: reset to 100%, then +10%*2, +1%*5 for both feed and spindle
+            feed_seq = [self.OVERRIDE_FEED_100] + [self.OVERRIDE_FEED_PLUS_10] * 2 + [self.OVERRIDE_FEED_PLUS_1] * 5
+            spindle_seq = [self.OVERRIDE_SPINDLE_100] + [self.OVERRIDE_SPINDLE_PLUS_10] * 2 + [self.OVERRIDE_SPINDLE_PLUS_1] * 5
+            override_bytes = bytes(feed_seq + spindle_seq)
         else:  # speed_level == 3
-            # +50% speed scaling
-            override_bytes = bytes([self.OVERRIDE_FEED_PLUS_10, self.OVERRIDE_SPINDLE_PLUS_10])
-            self.feed_override_pct = 150
-            self.spindle_override_pct = 150
+            # 150% speed scaling: reset to 100%, then +10%*5 for both feed and spindle
+            feed_seq = [self.OVERRIDE_FEED_100] + [self.OVERRIDE_FEED_PLUS_10] * 5
+            spindle_seq = [self.OVERRIDE_SPINDLE_100] + [self.OVERRIDE_SPINDLE_PLUS_10] * 5
+            override_bytes = bytes(feed_seq + spindle_seq)
             ssr_cmd = "CMD:CUTTING"
             self.set_machine_state("CUTTING")
 
-        # Transmit override bytes
+        # Transmit override bytes or process in software emulator
         self.sent_bytes_history.append(override_bytes)
         if self.mode == "real_serial" and self.serial_conn is not None:
             self.serial_conn.write(override_bytes)
             self.serial_conn.flush()
+        else:
+            self._emulator_process_override_bytes(override_bytes)
 
         res_info = {
             "speed_level": speed_level,
