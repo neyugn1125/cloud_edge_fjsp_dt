@@ -9,23 +9,27 @@
  * Hardware Peripherals:
  * - I2C Bus: SDA = GPIO 21, SCL = GPIO 22 (400 kHz Fast-Mode)
  * - Power Sensor: INA226 (I2C Address: 0x40, Shunt: 10 mOhm)
- * - Accelerometer: ADXL345 (I2C Address: 0x53, Full-Res +/- 16g or +/- 2g)
+ * - Accelerometer: ADXL345 (I2C Address: 0x53, Full-Res +/- 16g)
  * - Actuators:
  *     - SSR Standby Power: GPIO 25
  *     - SSR Main CNC Power: GPIO 26
+ *     - MANDATORY HARDWARE SAFETY: Connect external 10 kOhm pull-down resistors
+ *       from GPIO 25 and GPIO 26 to GND to prevent spurious SSR activation while
+ *       ESP32 pins are floating (High-Z) during initial power-on / reset.
  *
  * Signal Processing:
  * - Sampling Frequency: 200 Hz (5 ms / sample)
  * - Power Filtering: SimpleKalmanFilter1D (3-tap Median + 1D Kalman Filter)
  * - Vibration Calculation: 20-sample sliding window RMS (100 ms window)
  * - Telemetry Output: 10 Hz (100 ms interval) via UART (115200 bps)
- * - Serial Commands: CMD:IDLE, CMD:STANDBY, CMD:OFF, CMD:CUTTING
+ * - Serial Commands: CMD:IDLE, CMD:STANDBY, CMD:OFF, CMD:CUTTING, CMD:RESET_FAULT
  * ============================================================================
  */
 
 #include <Arduino.h>
 #include <Wire.h>
 #include <ArduinoJson.h>
+#include <driver/gpio.h>
 #include <math.h>
 
 // ----------------------------------------------------------------------------
@@ -233,7 +237,9 @@ VibrationRMSCalculator vibCalculator;
 
 bool ina226_connected = false;
 bool adxl345_connected = false;
+const uint8_t I2C_FAULT_THRESHOLD = 3;
 uint16_t i2c_consecutive_errors = 0;
+bool fault_latched = false;
 
 // Telemetry State Variables
 float latest_v_bus = 0.0f;
@@ -319,10 +325,10 @@ bool initADXL345() {
     if (Wire.endTransmission() != 0) {
         return false;
     }
-    // Data Format (0x31): Full resolution mode, +/- 16g (0x0B) or +/- 2g (0x08)
+    // Data Format (0x31): Full resolution mode, +/- 16g (0x0B)
     Wire.beginTransmission(ADXL345_I2C_ADDR);
     Wire.write(0x31);
-    Wire.write(0x08); // Full resolution, +/- 2g (3.9 mg/LSB)
+    Wire.write(0x0B); // Full resolution, +/- 16g (3.9 mg/LSB, prevents impact saturation)
     if (Wire.endTransmission() != 0) return false;
 
     // Output Data Rate (0x2C): 200 Hz ODR (0x0B), 100 Hz Bandwidth (synchronous with 5ms loop)
@@ -457,10 +463,23 @@ char serial_rx_buf[64];
 uint8_t serial_rx_idx = 0;
 
 void processCommand(const char* cmd) {
-    // Expected format: CMD:IDLE, CMD:STANDBY, CMD:OFF, CMD:CUTTING
+    // Expected format: CMD:IDLE, CMD:STANDBY, CMD:OFF, CMD:CUTTING, CMD:RESET_FAULT
     if (strncmp(cmd, "CMD:", 4) == 0) {
         const char* sub = cmd + 4;
-        if (strcmp(sub, "CUTTING") == 0) {
+        if (strcmp(sub, "RESET_FAULT") == 0) {
+            fault_latched = false;
+            i2c_consecutive_errors = 0;
+            recoverI2CBus();
+            ina226_connected = initINA226();
+            adxl345_connected = initADXL345();
+            Serial.println("{\"ack\": \"CMD:RESET_FAULT\", \"status\": \"OK\"}");
+        } else if (strcmp(sub, "OFF") == 0) {
+            applySSRState(STATE_OFF);
+            Serial.println("{\"ack\": \"CMD:OFF\", \"status\": \"OK\"}");
+        } else if (fault_latched) {
+            applySSRState(STATE_OFF);
+            Serial.printf("{\"error\": \"FAULT_LATCHED\", \"cmd\": \"%s\"}\n", cmd);
+        } else if (strcmp(sub, "CUTTING") == 0) {
             applySSRState(STATE_CUTTING);
             Serial.println("{\"ack\": \"CMD:CUTTING\", \"status\": \"OK\"}");
         } else if (strcmp(sub, "IDLE") == 0) {
@@ -469,9 +488,6 @@ void processCommand(const char* cmd) {
         } else if (strcmp(sub, "STANDBY") == 0) {
             applySSRState(STATE_STANDBY);
             Serial.println("{\"ack\": \"CMD:STANDBY\", \"status\": \"OK\"}");
-        } else if (strcmp(sub, "OFF") == 0) {
-            applySSRState(STATE_OFF);
-            Serial.println("{\"ack\": \"CMD:OFF\", \"status\": \"OK\"}");
         } else {
             Serial.printf("{\"error\": \"UNKNOWN_CMD\", \"cmd\": \"%s\"}\n", cmd);
         }
@@ -501,6 +517,10 @@ void handleSerialInput() {
 void setup() {
     Serial.begin(115200);
     delay(200);
+
+    // Enable internal pull-downs before OUTPUT mode to lock LOW during boot
+    gpio_pulldown_en((gpio_num_t)PIN_SSR_STANDBY);
+    gpio_pulldown_en((gpio_num_t)PIN_SSR_MAIN);
 
     // Initialize Actuator GPIOs with fail-safe boot state (OFF)
     pinMode(PIN_SSR_STANDBY, OUTPUT);
@@ -546,23 +566,82 @@ void loop() {
         float p_raw = 0.0f;
         float ax = 0.0f, ay = 0.0f, az = 0.0f;
 
-        bool read_ok = true;
-        if (ina226_connected && adxl345_connected) {
-            read_ok &= readINA226Data(v_bus, i_amp, p_raw);
-            read_ok &= readADXL345Data(ax, ay, az);
+        if (fault_latched) {
+            // Keep SSR locked OFF until Host issues CMD:RESET_FAULT
+            applySSRState(STATE_OFF);
+            latest_v_bus = 0.0f;
+            latest_i_amp = 0.0f;
+            latest_p_raw = 0.0f;
+            latest_p_filt = 0.0f;
+            latest_vib_rms = -1.0f;
+            latest_sensor_ok = false;
         } else {
-            read_ok = false;
-        }
-
-        if (!read_ok) {
-            i2c_consecutive_errors++;
-            if (i2c_consecutive_errors >= 5) {
-                recoverI2CBus();
-                i2c_consecutive_errors = 0;
+            bool read_ok = true;
+            if (ina226_connected && adxl345_connected) {
+                read_ok &= readINA226Data(v_bus, i_amp, p_raw);
+                read_ok &= readADXL345Data(ax, ay, az);
+            } else {
+                read_ok = false;
             }
-            if (ALLOW_SIM_FALLBACK) {
-                // Generate breadboard simulated data
-                generateSimulatedSensors(v_bus, i_amp, p_raw, ax, ay, az);
+
+            if (!read_ok) {
+                i2c_consecutive_errors++;
+                if (i2c_consecutive_errors < I2C_FAULT_THRESHOLD) {
+                    // Debounce transient I2C NACK: hold previous filtered estimates & do NOT cut SSR
+                    if (ALLOW_SIM_FALLBACK) {
+                        generateSimulatedSensors(v_bus, i_amp, p_raw, ax, ay, az);
+                        latest_v_bus = v_bus;
+                        latest_i_amp = i_amp;
+                        latest_p_raw = p_raw;
+                        latest_p_filt = powerFilter.update_estimate(p_raw);
+                        latest_vib_rms = vibCalculator.update(ax, ay, az);
+                        latest_sensor_ok = false;
+                    } else {
+                        latest_sensor_ok = true;
+                    }
+                } else {
+                    // Attempt I2C bus recovery and re-read
+                    recoverI2CBus();
+                    ina226_connected = initINA226();
+                    adxl345_connected = initADXL345();
+                    bool retry_ok = false;
+                    if (ina226_connected && adxl345_connected) {
+                        retry_ok = readINA226Data(v_bus, i_amp, p_raw) && readADXL345Data(ax, ay, az);
+                    }
+
+                    if (retry_ok) {
+                        i2c_consecutive_errors = 0;
+                        latest_v_bus = v_bus;
+                        latest_i_amp = i_amp;
+                        latest_p_raw = p_raw;
+                        latest_p_filt = powerFilter.update_estimate(p_raw);
+                        latest_vib_rms = vibCalculator.update(ax, ay, az);
+                        latest_sensor_ok = true;
+                    } else if (ALLOW_SIM_FALLBACK) {
+                        // Breadboard simulation fallback when ALLOW_SIM_FALLBACK != 0
+                        generateSimulatedSensors(v_bus, i_amp, p_raw, ax, ay, az);
+                        latest_v_bus = v_bus;
+                        latest_i_amp = i_amp;
+                        latest_p_raw = p_raw;
+                        latest_p_filt = powerFilter.update_estimate(p_raw);
+                        latest_vib_rms = vibCalculator.update(ax, ay, az);
+                        latest_sensor_ok = false;
+                    } else {
+                        // Explicit Latched Hardware Fault Trip: Shut down SSRs & lock until RESET_FAULT
+                        fault_latched = true;
+                        applySSRState(STATE_OFF);
+                        latest_v_bus = 0.0f;
+                        latest_i_amp = 0.0f;
+                        latest_p_raw = 0.0f;
+                        latest_p_filt = 0.0f;
+                        latest_vib_rms = -1.0f;
+                        latest_sensor_ok = false;
+                    }
+                }
+            } else {
+                i2c_consecutive_errors = 0;
+
+                // Apply DSP Filtering
                 float p_filt = powerFilter.update_estimate(p_raw);
                 float vib_rms = vibCalculator.update(ax, ay, az);
 
@@ -571,29 +650,9 @@ void loop() {
                 latest_p_raw = p_raw;
                 latest_p_filt = p_filt;
                 latest_vib_rms = vib_rms;
-            } else {
-                // Explicit Hardware Fault Trip: Turn off SSRs and flag fault
-                applySSRState(STATE_OFF);
-                latest_v_bus = 0.0f;
-                latest_i_amp = 0.0f;
-                latest_p_raw = 0.0f;
-                latest_p_filt = 0.0f;
-                latest_vib_rms = -1.0f;
+                latest_sensor_ok = true;
             }
-        } else {
-            i2c_consecutive_errors = 0;
-
-            // Apply DSP Filtering
-            float p_filt = powerFilter.update_estimate(p_raw);
-            float vib_rms = vibCalculator.update(ax, ay, az);
-
-            latest_v_bus = v_bus;
-            latest_i_amp = i_amp;
-            latest_p_raw = p_raw;
-            latest_p_filt = p_filt;
-            latest_vib_rms = vib_rms;
         }
-        latest_sensor_ok = read_ok;
     }
 
     // ------------------------------------------------------------------------
@@ -612,6 +671,8 @@ void loop() {
         doc["vib_rms_g"] = (latest_vib_rms < 0.0f) ? -1.0f : (roundf(latest_vib_rms * 100.0f) / 100.0f);
         doc["ssr_state"] = stateToString(current_state);
         doc["sensor_ok"] = latest_sensor_ok;
+        doc["fault_latched"] = fault_latched;
+        doc["i2c_err_cnt"] = i2c_consecutive_errors;
         doc["sim_fallback"] = (!latest_sensor_ok && (ALLOW_SIM_FALLBACK != 0));
 
         serializeJson(doc, Serial);

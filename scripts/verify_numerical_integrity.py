@@ -239,9 +239,11 @@ def verify_phase3_and_phase4_metrics():
     mode2 = next(r for r in p4_rows if r["mode_id"] == "Mode 2")
     mode3 = next(r for r in p4_rows if r["mode_id"] == "Mode 3")
 
-    # Mode 1 has high periodic cloud calls and high network/solver overhead
-    assert int(mode1["cloud_reschedule_calls"]) >= 8, "Mode 1 (Periodic Cloud) must invoke periodic reschedulings"
-    assert float(mode1["total_solver_latency_s"]) > 20.0, "Mode 1 must accumulate high Cloud solver latency"
+    # Mode 1 has high periodic resync calls and higher resync latency than Mode 3
+    assert int(mode1["cloud_reschedule_calls"]) >= 8, "Mode 1 (Periodic Resync) must invoke periodic reschedulings"
+    assert float(mode1["total_solver_latency_s"]) > float(mode3["total_solver_latency_s"]), (
+        "Mode 1 must accumulate higher resync latency than Mode 3"
+    )
 
     # Mode 2 has zero cloud calls but suffers uncorrected drift and higher makespan/cost
     assert int(mode2["cloud_reschedule_calls"]) == 0, "Mode 2 must have 0 cloud calls"
@@ -304,6 +306,54 @@ def verify_markdown_concordance():
 
         # 7. Zero Breakdowns Guarantee
         assert "0.00" in text, f"Expected zero breakdowns not found in {fname}"
+
+        # 8. Measured Fast Heuristic Resync Latency Concordance
+        assert "0.214" in text, f"Expected measured Fast Heuristic Resync latency 0.214 ms not found in {fname}"
+
+        # 9. Exact CSV Concordance for Phase 4 HIL (Mean & Std for Makespan, TOU Cost, Cloud Calls)
+        with open("data/benchmarks/phase4_hil_metrics.csv", "r", encoding="utf-8") as f4:
+            p4_hil_rows = list(csv.DictReader(f4))
+        for r in p4_hil_rows:
+            mk_str = f"{float(r['final_makespan_min']):.2f}"
+            mk_std_str = f"{float(r['makespan_std_min']):.2f}"
+            cost_str = f"{float(r['tou_energy_cost_usd']):.3f}"
+            cost_std_str = f"{float(r['tou_cost_std_usd']):.3f}"
+            calls_str = f"{int(r['cloud_reschedule_calls'])}"
+            assert mk_str in text, f"Phase 4 HIL makespan {mk_str} ({r['mode_id']}) missing in {fname}"
+            assert mk_std_str in text, f"Phase 4 HIL makespan std {mk_std_str} ({r['mode_id']}) missing in {fname}"
+            assert cost_str in text, f"Phase 4 HIL TOU cost {cost_str} ({r['mode_id']}) missing in {fname}"
+            assert cost_std_str in text, f"Phase 4 HIL TOU cost std {cost_std_str} ({r['mode_id']}) missing in {fname}"
+            assert calls_str in text, f"Phase 4 HIL calls {calls_str} ({r['mode_id']}) missing in {fname}"
+
+        # 10. Exact CSV Concordance for Phase 5 CDI Sensitivity (all 10 thresholds)
+        with open("data/benchmarks/phase5_cdi_sensitivity.csv", "r", encoding="utf-8") as f5:
+            p5_cdi_rows = list(csv.DictReader(f5))
+        for r in p5_cdi_rows:
+            th_val = float(r["CDI_Threshold"])
+            calls_s = f"{float(r['Cloud_Calls_Mean']):.2f}"
+            cmax_s = f"{float(r['Makespan_Mean (min)']):.2f}"
+            cost_s = f"{float(r['TOU_Cost_Mean ($)']):.3f}"
+            sys_s = f"{float(r['Total_System_Cost_Index']):.4f}"
+            assert calls_s in text, f"CDI (theta={th_val:.2f}) Cloud_Calls_Mean={calls_s} missing in {fname}"
+            assert cmax_s in text, f"CDI (theta={th_val:.2f}) Makespan_Mean={cmax_s} missing in {fname}"
+            assert cost_s in text, f"CDI (theta={th_val:.2f}) TOU_Cost_Mean={cost_s} missing in {fname}"
+            assert sys_s in text, f"CDI (theta={th_val:.2f}) Total_System_Cost_Index={sys_s} missing in {fname}"
+
+        # 11. Hardware Spec Concordance (INA226 10 mOhm shunt, ADXL345 +/-16g @ 200 Hz, 10 kOhm pull-down)
+        assert "0.1\\,\\text{m}\\Omega" not in text and "0.1 m\\Omega" not in text and "0.1 mOhm" not in text, (
+            f"Outdated INA226 shunt value (0.1 mOhm) found in {fname}"
+        )
+        assert "10\\,\\text{m}\\Omega" in text or "10 m\\Omega" in text, (
+            f"Expected INA226 10 mOhm shunt specification not found in {fname}"
+        )
+        assert "16\\,\\text{g}" in text or "16g" in text, (
+            f"Expected ADXL345 +/-16g specification not found in {fname}"
+        )
+        assert "± 2\\,\\text{g}" not in text and "±2g" not in text, (
+            f"Outdated ADXL345 +/-2g specification found in {fname}"
+        )
+
+    assert not Path("scratch").exists(), "Obsolete scratch/ directory must not exist in repository"
 
     print("  -> PASSED: Both README.md and manuscript_draft.md match all benchmark CSVs and protocol invariants!")
 

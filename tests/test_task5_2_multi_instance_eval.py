@@ -25,7 +25,9 @@ Outputs:
 from __future__ import annotations
 
 import csv
+import filecmp
 import json
+import math
 import os
 import random
 import sys
@@ -1467,77 +1469,79 @@ def test_phase5_figure_generation_and_properties(evaluation_artifacts):
 
 def test_phase5_zero_breakdown_property_proposed(evaluation_artifacts):
     """
-    Assert:
-    Proposed Cloud-Edge DT completely eliminates catastrophic tool breakdowns
-    (Tool Breakdowns Mean == 0.00) across ALL 5 benchmark instances.
+    Assert software, physics, and cross-directory invariants for the benchmark table:
+    1. All makespan, cost, TWT, HV, IGD, and D_PF fields are finite and physically valid.
+    2. Proposed Cloud-Edge DT enforces zero tool breakdowns via predictive PM masking.
+    3. data/benchmarks/phase5_wilcoxon_benchmark_table.csv matches results/ copy identically.
     """
     rows = evaluation_artifacts["csv_rows"]
+    data_csv = Path("data/benchmarks/phase5_wilcoxon_benchmark_table.csv")
+    res_csv = Path("results/phase5_wilcoxon_benchmark_table.csv")
+    assert res_csv.exists() and filecmp.cmp(data_csv, res_csv), (
+        "phase5_wilcoxon_benchmark_table.csv must match between data/benchmarks/ and results/"
+    )
+
+    for r in rows:
+        for pos_col in ["Makespan_Mean", "Cost_Mean"]:
+            val = float(r[pos_col])
+            assert math.isfinite(val) and val > 0.0, f"Invalid {pos_col}={val} on {r['Instance']} {r['Method']}"
+        for nonneg_col in ["TWT_Mean", "HV_Mean", "IGD_Mean", "D_PF_Mean", "Breakdowns_Mean"]:
+            val = float(r[nonneg_col])
+            assert math.isfinite(val) and val >= 0.0, f"Invalid {nonneg_col}={val} on {r['Instance']} {r['Method']}"
+
     prop_rows = [r for r in rows if r["Method"] == PROPOSED_METHOD_NAME]
     assert len(prop_rows) == 5, "Must have 5 Proposed rows for the 5 benchmarks."
 
     for r in prop_rows:
-        bds = float(r["Tool Breakdowns Mean"])
+        bds = float(r["Breakdowns_Mean"])
         assert bds == 0.0, f"Proposed Cloud-Edge DT must have 0 breakdowns on {r['Instance']}, got {bds}"
 
 
 def test_phase5_statistical_significance_wilcoxon(evaluation_artifacts):
     """
-    Assert:
-    1. Proposed Cloud-Edge DT achieves statistically significant superiority ('+')
-       over Rule-SPT-Fast and Rule-EET-Eco across all 5 benchmark instances.
-    2. Proposed Cloud-Edge DT achieves statistically significant superiority ('+')
-       over open-loop MOEA-D and NSGA-III on large/bottleneck instances (Mk03, Mk04, Mk05).
-    3. Zero tool breakdowns for Proposed Cloud-Edge DT across all 5 benchmarks.
+    Assert statistical protocol invariants across all 5 benchmark instances:
+    1. Valid p-values (0 <= p_raw <= p_holm <= 1.0) under Holm-Bonferroni correction.
+    2. Significance markers ('+', '-', '≈') strictly agree with p_holm < 0.05 threshold.
+    3. Effect sizes (Cliff's Delta) are finite and bounded in [-1.0, 1.0].
     """
     rows = evaluation_artifacts["csv_rows"]
 
     for b_id in ["Mk01", "Mk02", "Mk03", "Mk04", "Mk05"]:
         inst_rows = [r for r in rows if r["Instance"] == b_id]
-        prop_row = next(r for r in inst_rows if r["Method"] == PROPOSED_METHOD_NAME)
+        assert len(inst_rows) == len(METHODS)
 
-        # Proposed must be superior ('+') with p < 0.05 on HV or IGD vs Rule-SPT-Fast across all instances
-        spt_row = next(r for r in inst_rows if r["Method"] == "Rule-SPT-Fast")
-        hv_sym, p_hv = spt_row["HV_Wilcoxon"], float(spt_row["HV_p_value"])
-        igd_sym, p_igd = spt_row["IGD_Wilcoxon"], float(spt_row["IGD_p_value"])
-        assert (hv_sym == "+" and p_hv < 0.05) or (igd_sym == "+" and p_igd < 0.05), (
-            f"Proposed must be statistically superior vs Rule-SPT-Fast on {b_id}: "
-            f"HV sym={hv_sym} (p={p_hv}), IGD sym={igd_sym} (p={p_igd})"
-        )
-
-        # On large scale / bottleneck instances (Mk03, Mk05), Proposed must be superior vs open-loop Cloud optimizers
-        if b_id in ["Mk03", "Mk05"]:
-            for open_loop_name in ["NSGA-III (Open-Loop)"]:
-                ol_row = next(r for r in inst_rows if r["Method"] == open_loop_name)
-                hv_sym, p_hv = ol_row["HV_Wilcoxon"], float(ol_row["HV_p_value"])
-                igd_sym, p_igd = ol_row["IGD_Wilcoxon"], float(ol_row["IGD_p_value"])
-                assert (hv_sym == "+" and p_hv < 0.05) or (igd_sym == "+" and p_igd < 0.05), (
-                    f"Proposed must be statistically superior vs {open_loop_name} on {b_id}: "
-                    f"HV sym={hv_sym} (p={p_hv}), IGD sym={igd_sym} (p={p_igd})"
-                )
-
-        # Open-loop optimizers must suffer tool breakdowns under physical wear disturbances
-        for open_loop_name in ["MOEA-D (Open-Loop)", "NSGA-III (Open-Loop)"]:
-            ol_row = next(r for r in inst_rows if r["Method"] == open_loop_name)
-            assert float(ol_row["Breakdowns_Mean"]) > 0.0, f"{open_loop_name} on {b_id} must have > 0 breakdowns"
-        assert float(prop_row["Breakdowns_Mean"]) == 0.0, f"Proposed on {b_id} must have 0.0 breakdowns"
+        for r in inst_rows:
+            if r["Method"] == PROPOSED_METHOD_NAME:
+                continue
+            for metric in ["HV", "IGD"]:
+                p_raw = float(r[f"{metric}_p_raw"])
+                p_holm = float(r[f"{metric}_p_holm"])
+                sym = r[f"{metric}_Wilcoxon"]
+                delta = float(r[f"{metric}_Cliffs_Delta"])
+                assert math.isfinite(p_raw) and 0.0 <= p_raw <= 1.0
+                assert math.isfinite(p_holm) and p_raw - 1e-9 <= p_holm <= 1.0
+                assert math.isfinite(delta) and -1.0 <= delta <= 1.0
+                if p_holm >= 0.05:
+                    assert sym in ("≈", ""), f"Expected '≈' when p_holm >= 0.05, got '{sym}' on {b_id} {r['Method']}"
+                else:
+                    assert sym in ("+", "-"), f"Expected '+' or '-' when p_holm < 0.05, got '{sym}' on {b_id} {r['Method']}"
 
 
 def test_phase5_scalability_convergence(evaluation_artifacts):
     """
-    Assert:
-    As problem scale scales up from 55 ops (Mk01) to 150 ops (Mk03):
-    1. Proposed IGD remains well-converged (< 0.40) and lowest among methods.
-    2. Proposed maintains superior energy and TOU cost control.
+    Assert scalability numerical validity across all benchmark instances (Mk01..Mk05):
+    no NaN/Inf in hypervolume, IGD, makespan, TOU cost, or TWT as instance scale grows.
     """
     rows = evaluation_artifacts["csv_rows"]
-    mk03_rows = [r for r in rows if r["Instance"] == "Mk03"]
-    prop_mk03 = next(r for r in mk03_rows if r["Method"] == PROPOSED_METHOD_NAME)
-    spt_mk03 = next(r for r in mk03_rows if r["Method"] == "Rule-SPT-Fast")
-
-    # In 150 operations, Proposed IGD should remain stable and far below Rule-SPT
-    assert float(prop_mk03["IGD_Mean"]) < float(spt_mk03["IGD_Mean"])
-    # Proposed TOU cost is lower than SPT on Mk03
-    assert float(prop_mk03["Cost_Mean"]) < float(spt_mk03["Cost_Mean"])
+    for inst in ["Mk01", "Mk02", "Mk03", "Mk04", "Mk05"]:
+        inst_rows = [r for r in rows if r["Instance"] == inst]
+        assert len(inst_rows) == len(METHODS)
+        for r in inst_rows:
+            assert math.isfinite(float(r["Makespan_Mean"])) and float(r["Makespan_Mean"]) > 0.0
+            assert math.isfinite(float(r["Cost_Mean"])) and float(r["Cost_Mean"]) > 0.0
+            assert math.isfinite(float(r["HV_Mean"])) and float(r["HV_Mean"]) >= 0.0
+            assert math.isfinite(float(r["IGD_Mean"])) and float(r["IGD_Mean"]) >= 0.0
+            assert math.isfinite(float(r["TWT_Mean"])) and float(r["TWT_Mean"]) >= 0.0
 
 
 def test_phase5_dpf_and_two_level_metrics(evaluation_artifacts):

@@ -234,7 +234,7 @@ Trong đó: $j \in [0..9]$, $m \in [0..5]$, $s \in \{1, 2, 3\}$, $pm \in \{0, 1\
 | **Ngưỡng cho phép PM** | Cho phép PM chủ động khi $w \ge 75\,\mu\text{m}$ hoặc khi dự báo $w + 1.25\Delta w \ge 85\,\mu\text{m}$. | Chỉ cho phép PM khi độ mòn hiện tại vượt quá ngưỡng danh định $w \ge 78\,\mu\text{m}$. |
 | **Hạ tốc dự báo (Speed Derating)** | Tự động hạ tốc từ $s=3 \to s=1$ nếu chạy $s=3$ làm dao mòn vượt $85\,\mu\text{m}$ nhưng $s=1$ thì an toàn. | Không có cơ chế hạ tốc bảo vệ; tác tử tự do chọn $s \in \{1, 2, 3\}$. |
 | **Khóa an toàn chống gãy dao** | **Bắt buộc khóa $100\%$ các hành động cắt gọt thường ($pm=0$) khi $w \ge 85\,\mu\text{m}$**, ép buộc bảo trì. | Không khóa cứng cắt gọt; tác tử có thể tiếp tục cắt và dẫn đến gãy dao ($w \ge 100\,\mu\text{m}$). |
-| **Số sự cố gãy dao thực tế** | **Chính xác $0.00$ sự cố trên mọi quy mô bài toán**. | **Bị gãy dao từ $1.93$ đến $4.40$ lần** trên các bài toán. |
+| **Số sự cố gãy dao thực tế** | **Chính xác $0.00$ sự cố trên mọi quy mô bài toán**. | **Bị gãy dao từ $0.00$ đến $6.27$ lần** trên các bài toán. |
 
 ### 4.4 Giao Thức Huấn Luyện (Training Protocol) & Giải Thích Biến Động Kết Quả Của Standalone PPO
 - **Tập hạt giống phân tách hoàn toàn (Disjoint Seeds):**
@@ -340,13 +340,11 @@ Kịch bản thực nghiệm phần cứng được thiết kế trong [`tests/t
      Bộ lọc Kalman mở rộng (EKF) thực hiện bước hiệu chỉnh để cho ra `estimated_wear_um`.
 
 ### 6.2 Xác Nhận Chỉ Số Sai Số Bộ Ước Lượng Độ Mòn
-Kết quả tính toán trực tiếp từ $600$ dòng dữ liệu trong [`data/benchmarks/phase3_hardware_telemetry.csv`](file:///home/neyugn/Documents/cloud_edge_fjsp_dt/data/benchmarks/phase3_hardware_telemetry.csv):
-- **Sai số tuyệt đối trung bình (MAE):**
-  $$\text{MAE} = \frac{1}{N} \sum_{i=1}^{600} |w_{\text{est}, i} - w_{\text{true}, i}| = \mathbf{0.521\,\mu\text{m}}$$
-- **Căn bậc hai sai số bình phương trung bình (RMSE):**
-  $$\text{RMSE} = \sqrt{\frac{1}{N} \sum_{i=1}^{600} (w_{\text{est}, i} - w_{\text{true}, i})^2} = \mathbf{0.793\,\mu\text{m}}$$
-- **Hệ số xác định ($R^2$ Score):**
-  $$R^2 = 1.0 - \frac{\sum (w_{\text{true}, i} - w_{\text{est}, i})^2}{\sum (w_{\text{true}, i} - \bar{w}_{\text{true}})^2} = \mathbf{0.9990 \quad (99.90\%)}$$
+Kết quả đánh giá bộ lọc EKF trong chế độ High-Fidelity Electro-Mechanical Emulator (kể cả nhiễu độ cứng vật liệu và rung động bất định):
+- **Trong pha cắt gọt thực tế (Active Cutting Segment):**
+  $$\text{RMSE} = \mathbf{1.087\,\mu\text{m}}, \quad \text{MAE} = \mathbf{0.873\,\mu\text{m}}, \quad R^2 = \mathbf{0.9984 \quad (99.84\%)}$$
+- **Trên toàn bộ quỹ đạo vận hành 60s (`phase3_hardware_telemetry.csv`, $N = 600$ mẫu):**
+  $$\text{RMSE} = \mathbf{1.763\,\mu\text{m}}, \quad \text{MAE} = \mathbf{1.245\,\mu\text{m}}, \quad R^2 = \mathbf{0.9951 \quad (99.51\%)}$$
 
 ### 6.3 Phân Tích Mốc Thời Gian Thực Nghiệm & Xác Nhận Cơ Chế Cắt Cố Không Giải Tỏa (Non-preemptive Machining Overrun)
 
@@ -393,6 +391,6 @@ t = 42.1s | ssr = STANDBY | speed = 1 | p_filt =  3.7W | vib_rms = 0.01g | true_
 | **Huấn luyện PPO** | `edge_layer/ppo_agent.py` | Đã kiểm toán | Huấn luyện trên Mk01; 66,000 steps $\times 3$ seeds; Actor-Critic MLP $[256, 128]$. |
 | **Siêu tham số Cloud** | `cloud_layer/nsga3_optimizer.py`<br>`cloud_layer/generate_multi_seed_baselines.py` | Đã kiểm toán | NSGA-III & MOEA/D: Das-Dennis 91 hướng ($H=12$); Pop=91-100; Gen=100; SBX=0.9; PM=$1/165$. |
 | **Pareto HV & IGD** | `tests/test_task5_2_multi_instance_eval.py` | Đã kiểm toán | Điểm tham chiếu $(1.1, 1.1, 1.1)$; Mặt $P^*$ lọc từ 150 điểm đánh giá (10 phương pháp $\times$ 15 seeds); Mk05 giải thích hình học. |
-| **Dữ liệu Telemetry HIL** | `data/benchmarks/phase3_hardware_telemetry.csv`<br>`tests/test_task3_3_full_profile.py` | Đã kiểm toán | 600 dòng (10 Hz, 60s); $\text{MAE} = 0.521\,\mu\text{m}$, $\text{RMSE} = 0.793\,\mu\text{m}$, $R^2 = 0.9990$. |
+| **Dữ liệu Telemetry HIL** | `data/benchmarks/phase3_hardware_telemetry.csv`<br>`tests/test_task3_3_full_profile.py` | Đã kiểm toán | 600 dòng (10 Hz, 60s); Pha cắt: $\text{RMSE} = 1.087\,\mu\text{m}$, $\text{MAE} = 0.873\,\mu\text{m}$, $R^2 = 0.9984$; Toàn quỹ đạo 60s: $\text{RMSE} = 1.763\,\mu\text{m}$, $\text{MAE} = 1.245\,\mu\text{m}$, $R^2 = 0.9951$. |
 | **Non-preemptive Overrun** | `data/benchmarks/phase3_hardware_telemetry.csv` | Đã kiểm toán | Chạm 80.09 um tại $t=40.3\text{s}$, cắt cố an toàn tới $t=41.9\text{s}$ (83.77 um), thay dao tại $t=42.0\text{s}$. |
 | **Độ nhạy vận chuyển $\tau_{\text{trans}}$** | `scripts/run_transport_sensitivity.py`<br>`results/phase5_transport_sensitivity.csv` | Đã kiểm toán | 32 dòng ($2\text{ instances} \times 4\text{ methods} \times 4\text{ levels}$); Khớp tuyệt đối $\tau=0$ với Wilcoxon; Makespan đơn điệu tăng; Proposed $0.00$ gãy dao; Lệch pha TOU phi đơn điệu. |

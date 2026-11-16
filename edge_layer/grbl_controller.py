@@ -311,13 +311,12 @@ class GRBLHardwareController:
             ssr_cmd = "CMD:CUTTING"
             self.set_machine_state("CUTTING")
 
-        # Transmit override bytes or process in software emulator
+        # Transmit override bytes and update internal shadow override state
         self.sent_bytes_history.append(override_bytes)
         if self.mode == "real_serial" and self.serial_conn is not None:
             self.serial_conn.write(override_bytes)
             self.serial_conn.flush()
-        else:
-            self._emulator_process_override_bytes(override_bytes)
+        self._emulator_process_override_bytes(override_bytes)
 
         res_info = {
             "speed_level": speed_level,
@@ -378,13 +377,55 @@ class GRBLHardwareController:
         """
         if self.mode == "real_serial" and self.serial_conn is not None:
             self.serial_conn.write(self.CMD_STATUS_REPORT)
-            raw = self.serial_conn.readline().decode("utf-8").strip()
-            # Basic parse
+            self.serial_conn.flush()
+
+            raw = ""
+            for _ in range(5):
+                raw_bytes = self.serial_conn.readline()
+                if isinstance(raw_bytes, (bytes, bytearray)):
+                    line = raw_bytes.decode("utf-8", errors="ignore").strip()
+                else:
+                    line = str(raw_bytes).strip()
+                if line.startswith("<") and line.endswith(">"):
+                    raw = line
+                    break
+
+            feed_val = float(self.current_f * self.speed_factor)
+            spindle_val = float(self.current_s * self.speed_factor)
+
+            if raw:
+                state_match = re.match(r"^<([^|>]+)", raw)
+                if state_match:
+                    self.grbl_state = state_match.group(1).strip()
+
+                mpos_match = re.search(r"MPos:([^|>]+)", raw)
+                if mpos_match:
+                    coords = [c.strip() for c in mpos_match.group(1).split(",")]
+                    if len(coords) >= 3:
+                        try:
+                            self.current_mpos = [
+                                float(coords[0]),
+                                float(coords[1]),
+                                float(coords[2]),
+                            ]
+                        except ValueError:
+                            pass
+
+                fs_match = re.search(r"FS:([0-9.]+),([0-9.]+)", raw)
+                if fs_match:
+                    feed_val = float(fs_match.group(1))
+                    spindle_val = float(fs_match.group(2))
+
+                ov_match = re.search(r"Ov:([0-9]+),([0-9]+),([0-9]+)", raw)
+                if ov_match:
+                    self.feed_override_pct = int(ov_match.group(1))
+                    self.spindle_override_pct = int(ov_match.group(3))
+
             return {
-                "state": self.current_state,
+                "state": self.grbl_state,
                 "mpos": list(self.current_mpos),
-                "feed": self.current_f * self.speed_factor,
-                "spindle": self.current_s * self.speed_factor,
+                "feed": feed_val,
+                "spindle": spindle_val,
                 "ov_feed": self.feed_override_pct,
                 "ov_spindle": self.spindle_override_pct,
                 "raw": raw,
@@ -395,7 +436,7 @@ class GRBLHardwareController:
                 f"{self.current_mpos[1]:.3f},{self.current_mpos[2]:.3f}|"
                 f"FS:{self.current_f * self.speed_factor:.0f},"
                 f"{self.current_s * self.speed_factor:.0f}|"
-                f"Ov:{self.feed_override_pct},{self.spindle_override_pct},100>\r\n"
+                f"Ov:{self.feed_override_pct},100,{self.spindle_override_pct}>\r\n"
             )
             return {
                 "state": self.grbl_state,
@@ -409,15 +450,19 @@ class GRBLHardwareController:
 
     def emergency_stop(self) -> str:
         """
-        Trigger immediate Feed Hold, Soft Reset, and turn off power SSRs.
+        Trigger immediate Feed Hold to decelerate axes safely, wait briefly
+        before issuing Soft Reset, and turn off power SSRs.
         """
         if self.mode == "real_serial" and self.serial_conn is not None:
-            self.serial_conn.write(self.CMD_FEED_HOLD + self.CMD_SOFT_RESET)
+            self.serial_conn.write(self.CMD_FEED_HOLD)
+            self.serial_conn.flush()
+            time.sleep(0.15)
+            self.serial_conn.write(self.CMD_SOFT_RESET)
             self.serial_conn.flush()
 
         self.grbl_state = "Hold"
         self.set_machine_state("OFF")
-        logger.warning("EMERGENCY STOP TRIGGERED: Feed hold sent, power SSRs commanded OFF.")
+        logger.warning("EMERGENCY STOP TRIGGERED: Feed hold sent, soft reset issued, power SSRs commanded OFF.")
         return "ALARM: EMERGENCY STOP EXECUTED"
 
     def reset_emulator(self) -> None:

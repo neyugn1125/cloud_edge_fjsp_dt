@@ -224,3 +224,84 @@ def test_real_serial_mode_error_handling():
     with pytest.raises(ConnectionError):
         BreadboardDAQInterface(mode="real_serial", port="/dev/ttyNonExistentPort")
 
+
+def test_real_serial_skips_non_telemetry_lines_and_timeout():
+    """
+    Verify real_serial read_telemetry skips warning/ack/error lines, records last_ack
+    and skipped_lines_count, returns valid telemetry JSON, and raises TimeoutError after max_attempts.
+    """
+    class MockSerial:
+        def __init__(self, lines):
+            self._lines = list(lines)
+            self.in_waiting = 0
+            self.is_open = True
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else b""
+
+        def write(self, data):
+            pass
+
+        def flush(self):
+            pass
+
+        def reset_input_buffer(self):
+            pass
+
+        def close(self):
+            pass
+
+    daq = BreadboardDAQInterface(mode="esp32_emulator")
+    daq.mode = "real_serial"
+    daq.serial_conn = MockSerial([
+        b"[WARN] I2C glitch\n",
+        b'{"ack": "CMD:CUTTING", "status": "OK"}\n',
+        b'{"error": "temporary", "code": 1}\n',
+        b'{"ts_ms": 1000, "v_bus": 24.0, "i_amp": 2.1, "p_raw_w": 50.4, '
+        b'"p_filt_w": 50.1, "vib_rms_g": 0.95, "ssr_state": "CUTTING", '
+        b'"sensor_ok": true, "fault_latched": false, "i2c_err_cnt": 0}\n',
+    ])
+
+    tel = daq.read_telemetry(max_attempts=10)
+    assert tel["ts_ms"] == 1000
+    assert tel["sensor_ok"] is True
+    assert daq.last_ack == {"error": "temporary", "code": 1}
+    assert daq.skipped_lines_count == 3
+
+    # Also verify TimeoutError when only non-telemetry/empty lines arrive
+    daq.serial_conn = MockSerial([b"\n", b"[INFO] boot\n", b'{"ack": "CMD:OFF"}\n'])
+    with pytest.raises(TimeoutError):
+        daq.read_telemetry(max_attempts=3)
+
+
+def test_estimator_sensor_fault_guard_freezes_state():
+    """
+    Verify RealTimeToolWearEstimator freezes x_est when sensor_ok=False,
+    fault_latched=True, or vib_rms_g < 0.0 instead of corrupting EKF state.
+    """
+    estimator = RealTimeToolWearEstimator()
+    estimator.reset(45.0)
+    prev_sigma = estimator.sigma_ekf
+
+    fault_tel = {
+        "sensor_ok": False,
+        "fault_latched": True,
+        "p_filt_w": 0.0,
+        "vib_rms_g": -1.0,
+        "ssr_state": "OFF",
+    }
+    est_val, est_std = estimator.estimate_wear(fault_tel, speed_level=1, return_std=True)
+    assert est_val == pytest.approx(45.0)
+    assert est_std == pytest.approx(prev_sigma)
+
+    # Also verify negative vibration alone triggers fault guard
+    neg_vib_tel = {
+        "sensor_ok": True,
+        "fault_latched": False,
+        "p_filt_w": 50.0,
+        "vib_rms_g": -0.5,
+        "ssr_state": "CUTTING",
+    }
+    assert estimator.estimate_wear(neg_vib_tel, speed_level=2) == pytest.approx(45.0)
+
+

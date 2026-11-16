@@ -11,6 +11,7 @@ Implements:
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import random
@@ -24,6 +25,8 @@ try:
     import serial
 except ImportError:
     serial = None  # Handled gracefully if pyserial is not available in test mocks
+
+logger = logging.getLogger("BreadboardDAQInterface")
 
 
 class SimpleKalmanFilter1D:
@@ -157,6 +160,9 @@ class BreadboardDAQInterface:
         self.sim_time_ms = 0
         self.inrush_remaining_ms = 0.0
         self.serial_conn = None
+        self.skipped_lines_count: int = 0
+        self.sensor_fault_count: int = 0
+        self.last_ack: Optional[Dict[str, Any]] = None
 
         self._filter = SimpleKalmanFilter1D(mea_e=4.0, est_e=4.0, q=0.20)
         self._filter.reset(self.p_idle_w)
@@ -194,6 +200,8 @@ class BreadboardDAQInterface:
         # Hardware Emulator Mode
         if cmd_clean.startswith("CMD:"):
             target_state = cmd_clean[4:].upper()
+            if target_state == "RESET_FAULT":
+                return True
             if target_state in {"IDLE", "STANDBY", "OFF", "CUTTING"}:
                 old_state = self.ssr_state
                 self.ssr_state = target_state
@@ -216,9 +224,11 @@ class BreadboardDAQInterface:
         self.current_speed = int(speed_level)
         self.true_wear_um = float(np.clip(true_wear_um, 0.0, 105.0))
 
-    def read_telemetry(self, dt_ms: int = 100) -> Dict[str, Any]:
+    def read_telemetry(self, dt_ms: int = 100, max_attempts: int = 15) -> Dict[str, Any]:
         """
         Reads one telemetry packet (at 10Hz = 100ms interval).
+        In 'real_serial' mode, gracefully skips boot warnings, empty lines, and {"ack": ...} / {"error": ...}
+        responses up to max_attempts before raising TimeoutError.
         In emulator mode, runs the 200Hz internal DSP subsampling loop (20 samples per 100ms)
         matching the exact behavior of firmware_esp32/main.cpp.
         Incorporates unmodeled physical disturbances:
@@ -232,10 +242,42 @@ class BreadboardDAQInterface:
         if self.mode == "real_serial":
             if not self.serial_conn or not self.serial_conn.is_open:
                 raise ConnectionError("Serial connection is not active.")
-            line = self.serial_conn.readline().decode("utf-8", errors="ignore").strip()
-            if line.startswith("{") and line.endswith("}"):
-                return json.loads(line)
-            raise ValueError(f"Invalid telemetry line received: {line}")
+            for _ in range(max_attempts):
+                raw_line = self.serial_conn.readline()
+                line = (
+                    raw_line.decode("utf-8", errors="ignore").strip()
+                    if isinstance(raw_line, (bytes, bytearray))
+                    else str(raw_line).strip()
+                )
+                if not line or not line.startswith("{"):
+                    self.skipped_lines_count += 1
+                    logger.debug(f"Skipped non-JSON serial line: {line!r}")
+                    continue
+
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    self.skipped_lines_count += 1
+                    logger.debug(f"Skipped malformed JSON serial line: {line!r}")
+                    continue
+
+                if not isinstance(data, dict) or not ("ts_ms" in data and "p_filt_w" in data):
+                    if isinstance(data, dict) and ("ack" in data or "error" in data):
+                        self.last_ack = data
+                    self.skipped_lines_count += 1
+                    logger.debug(f"Skipped non-telemetry JSON packet: {data}")
+                    continue
+
+                if (
+                    not data.get("sensor_ok", True)
+                    or data.get("fault_latched", False)
+                    or float(data.get("vib_rms_g", 0.0)) < 0.0
+                ):
+                    self.sensor_fault_count += 1
+
+                return data
+
+            raise TimeoutError("No valid telemetry JSON received within max_attempts")
 
         # Hardware Emulator Mode
         self.sim_time_ms += dt_ms
@@ -255,6 +297,8 @@ class BreadboardDAQInterface:
                 "vib_rms_g": 0.0,
                 "ssr_state": "OFF",
                 "sensor_ok": True,
+                "fault_latched": False,
+                "i2c_err_cnt": 0,
                 "sim_fallback": False,
             }
 
@@ -277,6 +321,8 @@ class BreadboardDAQInterface:
                 "vib_rms_g": 0.01,
                 "ssr_state": "STANDBY",
                 "sensor_ok": True,
+                "fault_latched": False,
+                "i2c_err_cnt": 0,
                 "sim_fallback": False,
             }
 
@@ -302,6 +348,8 @@ class BreadboardDAQInterface:
                 "vib_rms_g": round(float(vib_rms), 2),
                 "ssr_state": "IDLE",
                 "sensor_ok": True,
+                "fault_latched": False,
+                "i2c_err_cnt": 0,
                 "sim_fallback": False,
             }
 
@@ -355,6 +403,8 @@ class BreadboardDAQInterface:
             "vib_rms_g": round(float(vib_rms), 2),
             "ssr_state": "CUTTING",
             "sensor_ok": True,
+            "fault_latched": False,
+            "i2c_err_cnt": 0,
             "sim_fallback": False,
         }
 
@@ -491,6 +541,13 @@ class RealTimeToolWearEstimator:
             use_filter: True to use EKF tracking, False for instantaneous inversion.
             return_std: True to return (estimated_wear_um, sigma_ekf) tuple.
         """
+        if (
+            not telemetry.get("sensor_ok", True)
+            or telemetry.get("fault_latched", False)
+            or float(telemetry.get("vib_rms_g", 0.0)) < 0.0
+        ):
+            return (self.x_est, self.sigma_ekf) if return_std else self.x_est
+
         ssr_state = telemetry.get("ssr_state", "CUTTING")
         p_filt = float(telemetry.get("p_filt_w", 0.0))
         vib_rms = float(telemetry.get("vib_rms_g", 0.0))

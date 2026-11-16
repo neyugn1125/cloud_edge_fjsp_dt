@@ -317,3 +317,136 @@ def test_edge_digital_twin_full_closed_loop_with_onnx_and_grbl():
     assert node.cdi == 0.0
     assert node.trigger_cloud_reschedule is False
 
+
+def test_grbl_real_serial_query_status_parsing_and_ov_sync():
+    """
+    Verify GRBLHardwareController.query_status() in real_serial mode skips non-frame
+    lines (such as 'ok') and parses State, MPos, FS, and Ov:<feed>,<rapid>,<spindle>.
+    Also verify set_speed_override updates internal override pcts in real_serial mode.
+    """
+    class MockGRBLSerial:
+        def __init__(self, responses):
+            self._responses = list(responses)
+            self.written = []
+
+        def write(self, data):
+            self.written.append(data)
+
+        def flush(self):
+            pass
+
+        def readline(self):
+            return self._responses.pop(0) if self._responses else b""
+
+        def close(self):
+            pass
+
+    grbl = GRBLHardwareController(mode="grbl_emulator")
+    grbl.mode = "real_serial"
+    grbl.serial_conn = MockGRBLSerial([
+        b"ok\r\n",
+        b"<Run|MPos:12.500,34.000,-1.500|FS:625,12500|Ov:125,100,125>\r\n",
+    ])
+
+    st = grbl.query_status()
+    assert st["state"] == "Run"
+    assert st["mpos"] == [12.5, 34.0, -1.5]
+    assert st["feed"] == pytest.approx(625.0)
+    assert st["spindle"] == pytest.approx(12500.0)
+    assert st["ov_feed"] == 125
+    assert st["ov_spindle"] == 125
+
+    # Verify set_speed_override syncs shadow state in real_serial mode too
+    res_ov = grbl.set_speed_override(3)
+    assert res_ov["feed_override_pct"] == 150
+    assert res_ov["spindle_override_pct"] == 150
+    assert grbl.feed_override_pct == 150
+    assert grbl.spindle_override_pct == 150
+
+
+def test_edge_node_sensor_fault_triggers_emergency_stop():
+    """
+    Verify EdgeDigitalTwinNode.dispatch_operation() triggers immediate emergency stop
+    (Feed Hold before SSR cutoff), flags sensor_fault_stop=True and Cloud reschedule,
+    and preserves wear_estimator.x_est when DAQ reports sensor_ok=False.
+    """
+    class MockGRBLSerial:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(data)
+
+        def flush(self):
+            pass
+
+        def readline(self):
+            return b"ok\r\n"
+
+        def close(self):
+            pass
+
+    daq = BreadboardDAQInterface(mode="esp32_emulator")
+    daq_cmds = []
+    orig_send_cmd = daq.send_command
+
+    def tracking_send_cmd(cmd):
+        daq_cmds.append(cmd)
+        return orig_send_cmd(cmd)
+
+    daq.send_command = tracking_send_cmd
+    daq.read_telemetry = lambda dt_ms=100: {
+        "ts_ms": 2000,
+        "v_bus": 0.0,
+        "i_amp": 0.0,
+        "p_raw_w": 0.0,
+        "p_filt_w": 0.0,
+        "vib_rms_g": -1.0,
+        "ssr_state": "OFF",
+        "sensor_ok": False,
+        "fault_latched": True,
+        "i2c_err_cnt": 3,
+    }
+
+    grbl = GRBLHardwareController(mode="grbl_emulator", esp32_interface=daq)
+    grbl.mode = "real_serial"
+    mock_serial = MockGRBLSerial()
+    grbl.serial_conn = mock_serial
+
+    node = EdgeDigitalTwinNode(
+        machine_id="M0",
+        daq_interface=daq,
+        grbl_controller=grbl,
+        cdi_threshold=0.12,
+    )
+    node.wear_estimator.reset(32.5)
+    node.estimated_wear_um = 32.5
+
+    op = {
+        "op_id": "J1_O1",
+        "t_proc_min": 2.0,
+        "speed_level": 1,
+        "energy_kwh": 0.15,
+        "feed": 500.0,
+        "spindle": 10000.0,
+        "x": 10.0,
+        "y": 15.0,
+        "z": -1.0,
+    }
+
+    res = node.dispatch_operation(op)
+    assert res["sensor_fault_stop"] is True
+    assert res["trigger_cloud_reschedule"] is True
+    assert node.trigger_cloud_reschedule is True
+    assert node.last_trigger_payload is not None
+    assert node.last_trigger_payload.reason == "SENSOR_FAULT"
+    assert node.wear_estimator.x_est == pytest.approx(32.5)
+    assert res["estimated_wear_um"] == pytest.approx(32.5)
+
+    # Verify Feed Hold ('!') was sent before Soft Reset ('\x18') and CMD:OFF
+    assert b"!" in mock_serial.writes
+    assert b"\x18" in mock_serial.writes
+    assert mock_serial.writes.index(b"!") < mock_serial.writes.index(b"\x18")
+    assert "CMD:OFF" in daq_cmds
+
+

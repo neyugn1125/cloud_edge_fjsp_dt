@@ -132,13 +132,13 @@ def test_grbl_status_reporting_and_query():
     assert st["state"] == "Idle"
     assert st["ov_feed"] == 125
     assert st["ov_spindle"] == 125
-    assert "Ov:125,125,100" in st["raw"]
+    assert "Ov:125,100,125" in st["raw"]
 
     controller.set_speed_override(3)
     st3 = controller.query_status()
     assert st3["ov_feed"] == 150
     assert st3["ov_spindle"] == 150
-    assert "Ov:150,150,100" in st3["raw"]
+    assert "Ov:150,100,150" in st3["raw"]
 
 
 def test_grbl_motion_gcode_and_emergency_stop():

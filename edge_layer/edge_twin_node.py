@@ -463,9 +463,57 @@ class EdgeDigitalTwinNode:
         delta_wear = 0.8 * (v_s**2.0) * (t_actual) * float(disturbance_factor)
         self.current_wear_um = min(self.w_max_um, self.current_wear_um + delta_wear)
 
-        # Update DAQ hardware emulator & estimate wear
+        # Update DAQ hardware emulator & check sensor safety before wear estimation
         self.daq.set_operating_conditions(speed_level=speed_level, true_wear_um=self.current_wear_um)
         telemetry = self.daq.read_telemetry(dt_ms=100)
+        if not telemetry.get("sensor_ok", True) or telemetry.get("fault_latched", False):
+            self.grbl.emergency_stop()
+            self.trigger_cloud_reschedule = True
+            self.last_trigger_payload = RescheduleTriggerPayload(
+                machine_id=self.machine_id,
+                reason="SENSOR_FAULT",
+                cdi=self.cdi,
+                cdi_threshold=self.cdi_threshold,
+                current_wear_um=self.estimated_wear_um,
+                timestamp=float(self.c_actual),
+                details={
+                    "sensor_ok": telemetry.get("sensor_ok", False),
+                    "fault_latched": telemetry.get("fault_latched", False),
+                    "i2c_err_cnt": telemetry.get("i2c_err_cnt", 0),
+                    "op_id": op_data.get("op_id", "OP_DEFAULT"),
+                },
+            )
+            if self.mqtt_client is not None and getattr(self.mqtt_client, "is_connected", False):
+                self.mqtt_client.trigger_reschedule(
+                    machine_id=self.machine_id,
+                    reason="SENSOR_FAULT",
+                    cdi=self.cdi,
+                    cdi_threshold=self.cdi_threshold,
+                    current_wear_um=self.estimated_wear_um,
+                    details=self.last_trigger_payload.details,
+                )
+            step_result = {
+                "op_id": op_data.get("op_id", "OP_DEFAULT"),
+                "speed_level": speed_level,
+                "speed_factor": v_s,
+                "pm_done": pm_done,
+                "t_actual_min": t_actual,
+                "e_actual_kwh": e_actual,
+                "c_actual": self.c_actual,
+                "c_base": self.c_base,
+                "e_actual": self.e_actual,
+                "e_base": self.e_base,
+                "cdi": self.cdi,
+                "trigger_cloud_reschedule": self.trigger_cloud_reschedule,
+                "sensor_fault_stop": True,
+                "estimated_wear_um": self.estimated_wear_um,
+                "override_info": override_info,
+                "gcode_sent": gcode_cmd,
+                "gcode_resp": gcode_resp,
+            }
+            self.completed_operations.append(step_result)
+            return step_result
+
         self.estimated_wear_um = self.wear_estimator.estimate_wear(telemetry, speed_level=speed_level)
 
         # Step 6: Cumulative Tracking and CDI Computation
@@ -493,6 +541,7 @@ class EdgeDigitalTwinNode:
             "e_base": self.e_base,
             "cdi": cdi_val,
             "trigger_cloud_reschedule": self.trigger_cloud_reschedule,
+            "sensor_fault_stop": False,
             "estimated_wear_um": self.estimated_wear_um,
             "override_info": override_info,
             "gcode_sent": gcode_cmd,
