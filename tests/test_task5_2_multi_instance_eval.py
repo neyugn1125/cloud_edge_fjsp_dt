@@ -131,7 +131,7 @@ def execute_right_shift_rescheduling(
         speed = int(op["speed_level"])
         twin = env.machines[m_id]
         v_s = env.system_config.speed_scaling.levels[speed].speed_factor
-        est_inc = (1.35 * twin.base_eta) * (v_s ** twin.beta) * (float(op["t_base_min"]) / v_s)
+        est_inc = twin.base_eta * (v_s ** (twin.beta - 1)) * float(op["t_base_min"])
         pm_flag = 1 if (twin.current_wear_um + est_inc >= twin.w_max_um or twin.current_wear_um >= 0.80 * twin.w_max_um or op.get("had_pm", False)) and twin.current_wear_um > 50.0 else 0
         obs, r, term, tr, info = env.step((j_idx, m_idx, speed, pm_flag))
     return info

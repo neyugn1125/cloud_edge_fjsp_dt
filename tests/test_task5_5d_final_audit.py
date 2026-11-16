@@ -120,8 +120,8 @@ def test_audit_3_variant_1_authenticity(audit_data):
 
 def test_audit_4_phase4_hil_matches_phase5_cdi(audit_data):
     """
-    (4) Zero-call threshold (theta = 0.50 or 0.35) in CDI table matches 100% with Mode 2 in Phase 4 HIL,
-        and theta = 0.12 matches 100% with Mode 3.
+    (4) Zero-call threshold (theta = 0.50 or 0.35) in CDI table matches Mode 3 (One-Shot Autonomous + EKF)
+        in Phase 4 HIL, and theta = 0.12 matches Mode 4 (Proposed CDI + EKF).
     """
     cdi_rows = audit_data["cdi"]
     hil_rows = audit_data["phase4"]
@@ -132,22 +132,22 @@ def test_audit_4_phase4_hil_matches_phase5_cdi(audit_data):
     )
     row_th12 = next(r for r in cdi_rows if abs(float(r["CDI_Threshold"]) - 0.12) < 1e-4)
 
-    row_m2 = next(r for r in hil_rows if r["mode_id"] == "Mode 2")
     row_m3 = next(r for r in hil_rows if r["mode_id"] == "Mode 3")
+    row_m4 = next(r for r in hil_rows if r["mode_id"] == "Mode 4")
 
-    # Match at zero-call threshold <-> Mode 2 across VAL_SEEDS vs TEST_SEEDS evaluation splits
-    assert abs(float(row_th_zero["Makespan_Mean (min)"]) - float(row_m2["final_makespan_min"])) < 10.0
-    assert abs(float(row_th_zero["TOU_Cost_Mean ($)"]) - float(row_m2["tou_energy_cost_usd"])) < 0.35
-    assert abs(float(row_th_zero["Energy_Mean (kWh)"]) - float(row_m2["total_energy_kwh"])) < 1.0
-    assert abs(float(row_th_zero["Max_CDI_Mean"]) - float(row_m2["max_cdi"])) < 0.15
-    assert float(row_th_zero["Cloud_Calls_Mean"]) == 0.0 and int(row_m2["cloud_reschedule_calls"]) == 0
+    # Match at zero-call threshold <-> Mode 3 across VAL_SEEDS vs TEST_SEEDS evaluation splits
+    assert abs(float(row_th_zero["Makespan_Mean (min)"]) - float(row_m3["final_makespan_min"])) < 10.0
+    assert abs(float(row_th_zero["TOU_Cost_Mean ($)"]) - float(row_m3["tou_energy_cost_usd"])) < 0.35
+    assert abs(float(row_th_zero["Energy_Mean (kWh)"]) - float(row_m3["total_energy_kwh"])) < 1.0
+    assert abs(float(row_th_zero["Max_CDI_Mean"]) - float(row_m3["max_cdi"])) < 0.15
+    assert float(row_th_zero["Cloud_Calls_Mean"]) == 0.0 and float(row_m3["cloud_reschedule_calls"]) == 0.0
 
-    # Match at theta_th = 0.12 <-> Mode 3 across VAL_SEEDS vs TEST_SEEDS evaluation splits
-    assert abs(float(row_th12["Makespan_Mean (min)"]) - float(row_m3["final_makespan_min"])) < 10.0
-    assert abs(float(row_th12["TOU_Cost_Mean ($)"]) - float(row_m3["tou_energy_cost_usd"])) < 0.15
-    assert abs(float(row_th12["Energy_Mean (kWh)"]) - float(row_m3["total_energy_kwh"])) < 1.0
-    assert abs(float(row_th12["Max_CDI_Mean"]) - float(row_m3["max_cdi"])) < 0.05
-    assert 1.0 <= float(row_th12["Cloud_Calls_Mean"]) <= 2.0 and int(row_m3["cloud_reschedule_calls"]) in [1, 2]
+    # Match at theta_th = 0.12 <-> Mode 4 across VAL_SEEDS vs TEST_SEEDS evaluation splits
+    assert abs(float(row_th12["Makespan_Mean (min)"]) - float(row_m4["final_makespan_min"])) < 10.0
+    assert abs(float(row_th12["TOU_Cost_Mean ($)"]) - float(row_m4["tou_energy_cost_usd"])) < 0.15
+    assert abs(float(row_th12["Energy_Mean (kWh)"]) - float(row_m4["total_energy_kwh"])) < 1.0
+    assert abs(float(row_th12["Max_CDI_Mean"]) - float(row_m4["max_cdi"])) < 0.05
+    assert 1.0 <= float(row_th12["Cloud_Calls_Mean"]) <= 2.0 and 1.0 <= float(row_m4["cloud_reschedule_calls"]) <= 2.0
 
 
 def test_audit_5_max_cdi_bounded(audit_data):
@@ -210,12 +210,12 @@ if __name__ == "__main__":
     print("\n[CHECK 4 & 5] Phase 4 HIL <-> Phase 5 CDI Synchronization & CDI Boundedness:")
     th35 = next(r for r in data["cdi"] if abs(float(r["CDI_Threshold"]) - 0.35) < 1e-4)
     th12 = next(r for r in data["cdi"] if abs(float(r["CDI_Threshold"]) - 0.12) < 1e-4)
-    m2 = next(r for r in data["phase4"] if r["mode_id"] == "Mode 2")
     m3 = next(r for r in data["phase4"] if r["mode_id"] == "Mode 3")
+    m4 = next(r for r in data["phase4"] if r["mode_id"] == "Mode 4")
     print(f"  theta_th=0.35: Cmax = {th35['Makespan_Mean (min)']}m, Cost = ${th35['TOU_Cost_Mean ($)']}, Energy = {th35['Energy_Mean (kWh)']} kWh, Max CDI = {th35['Max_CDI_Mean']}, Calls = {th35['Cloud_Calls_Mean']}")
-    print(f"  HIL Mode 2   : Cmax = {m2['final_makespan_min']}m, Cost = ${m2['tou_energy_cost_usd']}, Energy = {m2['total_energy_kwh']} kWh, Max CDI = {m2['max_cdi']}, Calls = {m2['cloud_reschedule_calls']}")
-    print(f"  theta_th=0.12: Cmax = {th12['Makespan_Mean (min)']}m, Cost = ${th12['TOU_Cost_Mean ($)']}, Energy = {th12['Energy_Mean (kWh)']} kWh, Max CDI = {th12['Max_CDI_Mean']}, Calls = {th12['Cloud_Calls_Mean']}")
     print(f"  HIL Mode 3   : Cmax = {m3['final_makespan_min']}m, Cost = ${m3['tou_energy_cost_usd']}, Energy = {m3['total_energy_kwh']} kWh, Max CDI = {m3['max_cdi']}, Calls = {m3['cloud_reschedule_calls']}")
+    print(f"  theta_th=0.12: Cmax = {th12['Makespan_Mean (min)']}m, Cost = ${th12['TOU_Cost_Mean ($)']}, Energy = {th12['Energy_Mean (kWh)']} kWh, Max CDI = {th12['Max_CDI_Mean']}, Calls = {th12['Cloud_Calls_Mean']}")
+    print(f"  HIL Mode 4   : Cmax = {m4['final_makespan_min']}m, Cost = ${m4['tou_energy_cost_usd']}, Energy = {m4['total_energy_kwh']} kWh, Max CDI = {m4['max_cdi']}, Calls = {m4['cloud_reschedule_calls']}")
     print("  -> PASSED: Exact 100% numerical synchronization & all Max CDI < 0.60!")
 
     print("\n[CHECK 6] CDI Sensitivity 9-Point Monotonicity:")

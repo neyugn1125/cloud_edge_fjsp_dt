@@ -223,15 +223,19 @@ def test_standardized_latencies_and_method_naming():
     nsga_row = next(r for r in p2_rows if "NSGA-III Open-Loop" in r["Method"])
     assert any(x in nsga_row["Decision Latency"] for x in ["4.24 ± 0.03 s", "4.24", "25.4 ± 1.2 s", "25.4"]), f"Expected 4.24 ± 0.03 s or 25.4 ± 1.2 s, got {nsga_row['Decision Latency']}"
 
-    # 2. Phase 4 HIL Metrics
+    # 2. Phase 4 HIL Metrics (4 orthogonal modes)
     p4_path = Path("data/benchmarks/phase4_hil_metrics.csv")
     assert p4_path.exists()
     with open(p4_path, mode="r", encoding="utf-8") as f:
         p4_rows = list(csv.DictReader(f))
 
-    m2_row = next(r for r in p4_rows if r["mode_id"] == "Mode 2")
-    assert m2_row["mode_name"] == "One-Shot Cloud + Edge Autonomous (No Re-sync)"
-    assert float(m2_row["edge_decision_latency_ms"]) in (0.0132, 0.0214)
+    m3_row = next(r for r in p4_rows if r["mode_id"] == "Mode 3")
+    assert m3_row["mode_name"] == "One-Shot Autonomous + Live EKF (No Re-sync)"
+    assert float(m3_row["edge_decision_latency_ms"]) in (0.0132, 0.0214)
+
+    m4_row = next(r for r in p4_rows if r["mode_id"] == "Mode 4")
+    assert m4_row["mode_name"] == "Proposed Event-Triggered CDI + Live EKF (CDI=0.12)"
+    assert float(m4_row["edge_decision_latency_ms"]) in (0.0132, 0.0214)
 
     # 3. Phase 5 Wilcoxon Benchmark Table
     wilc_path = Path("data/benchmarks/phase5_wilcoxon_benchmark_table.csv")

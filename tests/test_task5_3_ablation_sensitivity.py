@@ -321,7 +321,7 @@ def run_phase5_cdi_sensitivity(
         comm_overhead_l: List[float] = []
 
         for s in seeds:
-            res = run_closed_loop_hil_simulation(seed=s, mode=3, cdi_threshold=th)
+            res = run_closed_loop_hil_simulation(seed=s, mode=4, cdi_threshold=th)
             calls_l.append(float(res["cloud_calls"]))
             cmax_l.append(float(res["makespan_min"]))
             cost_l.append(float(res["tou_cost_usd"]))
@@ -347,13 +347,13 @@ def run_phase5_cdi_sensitivity(
         # Total System Cost Index (incorporating cloud communication and computation overhead)
         total_sys_cost_idx = 0.45 * (cmax_m / cmax_nominal) + 0.45 * (cost_m / cost_nominal) + 0.10 * (calls_m / 10.0)
 
-        # Operating zone classification aligned with theoretical sensitivity plateaus
-        if th < 0.07:
+        # Data-driven operating zone classification based on empirical statistical behavior
+        if calls_m >= 2.5:
             zone = "Over-Triggering Region"
-        elif 0.07 <= th <= 0.165:
-            zone = "Robust Operating Plateau"
-        else:
+        elif calls_m <= 1.0 and max_cdi_m >= 0.19:
             zone = "Uncorrected Drift Region"
+        else:
+            zone = "Robust Operating Plateau"
 
         rec = {
             "CDI_Threshold": th,
@@ -567,17 +567,34 @@ def plot_phase5_ablation_and_sensitivity(
     y_twin_max = max(max(total_sys_costs), max(sched_composite)) + 0.14
     ax2_twin.set_ylim(y_twin_min, y_twin_max)
 
-    # Shaded Zones
-    ax2.axvspan(0.015, 0.07, color="#E74C3C", alpha=0.10, label="Over-Triggering Region")
-    ax2.axvspan(0.07, 0.165, color="#2ECC71", alpha=0.14, label="Robust Operating Plateau (0.08–0.15)")
-    ax2.axvspan(0.165, 0.52, color="#F39C12", alpha=0.10, label="Uncorrected Drift Region")
+    # Dynamically extract data-driven zone boundaries from sensitivity_rows
+    over_ths = [float(r["CDI_Threshold"]) for r in sensitivity_rows if r.get("Zone") == "Over-Triggering Region"]
+    plateau_ths = [float(r["CDI_Threshold"]) for r in sensitivity_rows if r.get("Zone") == "Robust Operating Plateau"]
+    drift_ths = [float(r["CDI_Threshold"]) for r in sensitivity_rows if r.get("Zone") == "Uncorrected Drift Region"]
 
-    # Degradation Cliff Marker at 0.15 -> 0.18
-    ax2.axvline(0.165, color="#E67E22", linestyle=":", linewidth=2.0, alpha=0.85)
+    min_plateau_th = min(plateau_ths) if plateau_ths else 0.08
+    max_plateau_th = max(plateau_ths) if plateau_ths else 0.15
+    drift_min_th = min(drift_ths) if drift_ths else 0.18
+    left_bound = 0.5 * (max(over_ths) + min_plateau_th) if over_ths else (min_plateau_th - 0.015)
+    right_bound = 0.5 * (max_plateau_th + drift_min_th) if drift_ths else (max_plateau_th + 0.015)
+
+    # Shaded Zones aligned identically with CSV Zone classifications
+    ax2.axvspan(0.015, left_bound, color="#E74C3C", alpha=0.10, label="Over-Triggering Region")
+    ax2.axvspan(
+        left_bound,
+        right_bound,
+        color="#2ECC71",
+        alpha=0.14,
+        label=f"Robust Operating Plateau ({min_plateau_th:.2f}–{max_plateau_th:.2f})",
+    )
+    ax2.axvspan(right_bound, 0.52, color="#F39C12", alpha=0.10, label="Uncorrected Drift Region")
+
+    # Degradation Cliff Marker
+    ax2.axvline(right_bound, color="#E67E22", linestyle=":", linewidth=2.0, alpha=0.85)
     ax2.annotate(
-        "Degradation Cliff\n(Unmitigated Drift: θ_th ≥ 0.18)",
-        xy=(0.165, 0.58 * max_calls_upper),
-        xytext=(0.195, 0.72 * max_calls_upper),
+        f"Degradation Cliff\n(Unmitigated Drift: θ_th ≥ {drift_min_th:.2f})",
+        xy=(right_bound, 0.58 * max_calls_upper),
+        xytext=(right_bound + 0.03, 0.72 * max_calls_upper),
         arrowprops=dict(facecolor="#E67E22", edgecolor="black", arrowstyle="->", lw=1.2),
         bbox=dict(boxstyle="round,pad=0.3", facecolor="#FEF9E7", edgecolor="#E67E22", linewidth=1.0),
         fontsize=7.6, fontweight="bold", color="#B9770E"
@@ -588,17 +605,17 @@ def plot_phase5_ablation_and_sensitivity(
     opt_th = th_vals[opt_idx]
     opt_calls = cloud_calls[opt_idx]
     opt_sys_cost = total_sys_costs[opt_idx]
-    opt_sched_idx = sched_composite[opt_idx]
-    opt_cmax = makespans[opt_idx]
     ax2_twin.plot(opt_th, opt_sys_cost, marker="*", markersize=15, color="#F1C40F", markeredgecolor="black", markeredgewidth=1.2, zorder=10)
     ax2.axvline(opt_th, color="#27AE60", linestyle="--", linewidth=1.8, alpha=0.85)
 
-    # Honest trade-off annotation pointing strictly to the empirical minimum Total System Cost Index
+    # Honest trade-off annotation pointing strictly to empirical minimum & exact plateau bounds
     ax2_twin.annotate(
         f"Empirical Optimum (θ_th* = {opt_th:.2f}):\n"
         f"• Minimum Total System Cost Index ({opt_sys_cost:.4f}, calls={opt_calls:.2f})\n"
-        f"• Stable Plateau θ_th in [0.05, 0.15] ({makespans[th_vals.index(0.05)]:.1f}m–{makespans[th_vals.index(0.15)]:.1f}m; θ=0.12 -> {cloud_calls[th_vals.index(0.12)]:.1f} calls)\n"
-        f"• θ_th ≥ 0.18 cuts calls to 0–1 but degrades Makespan to {makespans[-1]:.1f}m",
+        f"• Robust Plateau θ_th in [{min_plateau_th:.2f}, {max_plateau_th:.2f}] "
+        f"({makespans[th_vals.index(min_plateau_th)]:.1f}m–{makespans[th_vals.index(max_plateau_th)]:.1f}m; "
+        f"θ=0.12 -> {cloud_calls[th_vals.index(0.12)]:.2f} calls)\n"
+        f"• θ_th ≥ {drift_min_th:.2f} cuts calls to 0–1 but degrades Makespan to {makespans[-1]:.1f}m",
         xy=(opt_th, opt_sys_cost),
         xytext=(0.18, y_twin_min + 0.015),
         arrowprops=dict(facecolor="#27AE60", edgecolor="black", arrowstyle="->", lw=1.5),

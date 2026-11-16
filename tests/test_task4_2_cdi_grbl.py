@@ -373,14 +373,20 @@ def test_edge_node_sensor_fault_triggers_emergency_stop():
     class MockGRBLSerial:
         def __init__(self):
             self.writes = []
+            self._pending_status = False
 
         def write(self, data):
             self.writes.append(data)
+            if data == b"?":
+                self._pending_status = True
 
         def flush(self):
             pass
 
         def readline(self):
+            if self._pending_status:
+                self._pending_status = False
+                return b"<Hold:0|MPos:0.000,0.000,0.000|FS:0,10000|Ov:100,100,100>\r\n"
             return b"ok\r\n"
 
         def close(self):
@@ -448,5 +454,128 @@ def test_edge_node_sensor_fault_triggers_emergency_stop():
     assert b"\x18" in mock_serial.writes
     assert mock_serial.writes.index(b"!") < mock_serial.writes.index(b"\x18")
     assert "CMD:OFF" in daq_cmds
+    assert grbl.emergency_stop_log == [
+        "FEED_HOLD_SENT",
+        "AXES_STOPPED_VERIFIED",
+        "SSR_OFF_SENT",
+        "SOFT_RESET_SENT",
+    ]
+
+
+def test_grbl_emergency_stop_waits_for_hold0_before_ssr_and_reset():
+    """
+    Verify Stop Category 1 sequence in GRBLHardwareController.emergency_stop():
+    1. Immediately sends Feed Hold ('!') and flushes.
+    2. Polls '?' while GRBL reports Hold:1 with non-zero feed (axes still decelerating).
+    3. Only after GRBL reports Hold:0 (or feed <= 1e-3 / Idle) does it send CMD:OFF to ESP32
+       and then Soft Reset (0x18) to GRBL.
+    4. Records exact event sequence in emergency_stop_log.
+    """
+    timeline = []
+
+    class DeceleratingMockGRBLSerial:
+        def __init__(self, status_sequence):
+            self._status_sequence = list(status_sequence)
+            self._pending_status = False
+
+        def write(self, data):
+            timeline.append(("GRBL", data))
+            if data == b"?":
+                self._pending_status = True
+
+        def flush(self):
+            pass
+
+        def readline(self):
+            if self._pending_status:
+                self._pending_status = False
+                if self._status_sequence:
+                    return self._status_sequence.pop(0)
+            return b"ok\r\n"
+
+        def close(self):
+            pass
+
+    class TrackingESP32:
+        def send_command(self, cmd):
+            timeline.append(("ESP32", cmd))
+            return True
+
+    esp32 = TrackingESP32()
+    grbl = GRBLHardwareController(mode="grbl_emulator", esp32_interface=esp32)
+    grbl.mode = "real_serial"
+    grbl.grbl_state = "Run"
+    grbl.serial_conn = DeceleratingMockGRBLSerial([
+        b"<Hold:1|MPos:10.500,20.000,-1.500|FS:420,10000|Ov:100,100,100>\r\n",
+        b"<Hold:1|MPos:10.800,20.000,-1.500|FS:110,10000|Ov:100,100,100>\r\n",
+        b"<Hold:0|MPos:10.850,20.000,-1.500|FS:0,10000|Ov:100,100,100>\r\n",
+    ])
+
+    alarm = grbl.emergency_stop(max_poll_s=1.0, poll_interval_s=0.01)
+    assert "EMERGENCY STOP" in alarm
+    assert grbl.emergency_stop_log == [
+        "FEED_HOLD_SENT",
+        "AXES_STOPPED_VERIFIED",
+        "SSR_OFF_SENT",
+        "SOFT_RESET_SENT",
+    ]
+
+    # Exact cross-device timeline: '!' -> 3 status polls ('?') -> ESP32 CMD:OFF -> Soft Reset (0x18)
+    assert timeline == [
+        ("GRBL", b"!"),
+        ("GRBL", b"?"),
+        ("GRBL", b"?"),
+        ("GRBL", b"?"),
+        ("ESP32", "CMD:OFF"),
+        ("GRBL", b"\x18"),
+    ]
+
+
+def test_grbl_emergency_stop_timeout_still_executes_ssr_off_and_reset():
+    """
+    Verify safety timeout fallback in emergency_stop() if GRBL stays in Hold:1
+    beyond max_poll_s: SSR OFF and Soft Reset still execute rather than hanging.
+    """
+    timeline = []
+
+    class StuckHold1Serial:
+        def __init__(self):
+            self._pending_status = False
+
+        def write(self, data):
+            timeline.append(("GRBL", data))
+            if data == b"?":
+                self._pending_status = True
+
+        def flush(self):
+            pass
+
+        def readline(self):
+            if self._pending_status:
+                self._pending_status = False
+                return b"<Hold:1|MPos:5.000,5.000,-1.000|FS:250,10000|Ov:100,100,100>\r\n"
+            return b"ok\r\n"
+
+    class TrackingESP32:
+        def send_command(self, cmd):
+            timeline.append(("ESP32", cmd))
+            return True
+
+    grbl = GRBLHardwareController(mode="grbl_emulator", esp32_interface=TrackingESP32())
+    grbl.mode = "real_serial"
+    grbl.grbl_state = "Run"
+    grbl.serial_conn = StuckHold1Serial()
+
+    grbl.emergency_stop(max_poll_s=0.06, poll_interval_s=0.02)
+    assert grbl.emergency_stop_log == [
+        "FEED_HOLD_SENT",
+        "AXES_STOP_TIMEOUT",
+        "SSR_OFF_SENT",
+        "SOFT_RESET_SENT",
+    ]
+    assert timeline[0] == ("GRBL", b"!")
+    assert timeline[-2] == ("ESP32", "CMD:OFF")
+    assert timeline[-1] == ("GRBL", b"\x18")
+
 
 

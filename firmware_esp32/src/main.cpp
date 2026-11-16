@@ -13,6 +13,7 @@
  * - Actuators:
  *     - SSR Standby Power: GPIO 25
  *     - SSR Main CNC Power: GPIO 26
+ *     - GRBL Hardware Feed Hold: GPIO 27 (wired to GRBL Shield/DLC32 A1; HIGH=run, LOW=brake)
  *     - MANDATORY HARDWARE SAFETY: Connect external 10 kOhm pull-down resistors
  *       from GPIO 25 and GPIO 26 to GND to prevent spurious SSR activation while
  *       ESP32 pins are floating (High-Z) during initial power-on / reset.
@@ -35,10 +36,12 @@
 // ----------------------------------------------------------------------------
 // Pin Configurations & Constants
 // ----------------------------------------------------------------------------
-#define PIN_I2C_SDA         21
-#define PIN_I2C_SCL         22
-#define PIN_SSR_STANDBY     25
-#define PIN_SSR_MAIN        26
+#define PIN_I2C_SDA           21
+#define PIN_I2C_SCL           22
+#define PIN_SSR_STANDBY       25
+#define PIN_SSR_MAIN          26
+#define PIN_GRBL_FEED_HOLD    27   // GRBL Feed Hold A1 (HIGH = normal, LOW = emergency brake)
+#define SPINDLE_DECEL_WAIT_MS 2000 // Safe 2.0s deceleration window before cutting Spindle SSR
 
 #define INA226_I2C_ADDR     0x40
 #define ADXL345_I2C_ADDR    0x53
@@ -240,6 +243,8 @@ bool adxl345_connected = false;
 const uint8_t I2C_FAULT_THRESHOLD = 3;
 uint16_t i2c_consecutive_errors = 0;
 bool fault_latched = false;
+bool fault_decel_active = false;
+uint32_t fault_decel_start_ms = 0;
 
 // Telemetry State Variables
 float latest_v_bus = 0.0f;
@@ -467,17 +472,35 @@ void processCommand(const char* cmd) {
     if (strncmp(cmd, "CMD:", 4) == 0) {
         const char* sub = cmd + 4;
         if (strcmp(sub, "RESET_FAULT") == 0) {
-            fault_latched = false;
-            i2c_consecutive_errors = 0;
             recoverI2CBus();
             ina226_connected = initINA226();
             adxl345_connected = initADXL345();
-            Serial.println("{\"ack\": \"CMD:RESET_FAULT\", \"status\": \"OK\"}");
+            float v_test = 0.0f, i_test = 0.0f, p_test = 0.0f;
+            float ax_test = 0.0f, ay_test = 0.0f, az_test = 0.0f;
+            bool sensors_ok = ina226_connected && adxl345_connected &&
+                              readINA226Data(v_test, i_test, p_test) &&
+                              readADXL345Data(ax_test, ay_test, az_test);
+            if (sensors_ok || (ALLOW_SIM_FALLBACK != 0)) {
+                fault_latched = false;
+                fault_decel_active = false;
+                i2c_consecutive_errors = 0;
+                digitalWrite(PIN_GRBL_FEED_HOLD, HIGH);
+                Serial.println("{\"ack\": \"CMD:RESET_FAULT\", \"status\": \"OK\"}");
+            } else {
+                fault_latched = true;
+                fault_decel_active = false;
+                applySSRState(STATE_OFF);
+                digitalWrite(PIN_GRBL_FEED_HOLD, LOW);
+                Serial.println("{\"error\": \"SENSOR_RECOVERY_FAILED\", \"cmd\": \"CMD:RESET_FAULT\"}");
+            }
         } else if (strcmp(sub, "OFF") == 0) {
+            fault_decel_active = false;
             applySSRState(STATE_OFF);
             Serial.println("{\"ack\": \"CMD:OFF\", \"status\": \"OK\"}");
         } else if (fault_latched) {
-            applySSRState(STATE_OFF);
+            if (!fault_decel_active) {
+                applySSRState(STATE_OFF);
+            }
             Serial.printf("{\"error\": \"FAULT_LATCHED\", \"cmd\": \"%s\"}\n", cmd);
         } else if (strcmp(sub, "CUTTING") == 0) {
             applySSRState(STATE_CUTTING);
@@ -529,6 +552,13 @@ void setup() {
     digitalWrite(PIN_SSR_STANDBY, LOW);
     applySSRState(STATE_OFF); // Fail-safe default initial state: OFF
 
+    // Initialize hardware GRBL Feed Hold pin (HIGH = normal, LOW = active brake)
+    gpio_pullup_en((gpio_num_t)PIN_GRBL_FEED_HOLD);
+    digitalWrite(PIN_GRBL_FEED_HOLD, HIGH);
+    pinMode(PIN_GRBL_FEED_HOLD, OUTPUT);
+    gpio_set_direction((gpio_num_t)PIN_GRBL_FEED_HOLD, GPIO_MODE_INPUT_OUTPUT);
+    digitalWrite(PIN_GRBL_FEED_HOLD, HIGH);
+
     // Initialize I2C Bus at 400kHz
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_FREQ_HZ);
     Wire.setTimeOut(50);
@@ -567,8 +597,17 @@ void loop() {
         float ax = 0.0f, ay = 0.0f, az = 0.0f;
 
         if (fault_latched) {
-            // Keep SSR locked OFF until Host issues CMD:RESET_FAULT
-            applySSRState(STATE_OFF);
+            digitalWrite(PIN_GRBL_FEED_HOLD, LOW);
+            if (fault_decel_active) {
+                // Stop Category 1 Phase 2: cut SSR after safe axis deceleration window
+                if (millis() - fault_decel_start_ms >= SPINDLE_DECEL_WAIT_MS) {
+                    fault_decel_active = false;
+                    applySSRState(STATE_OFF);
+                }
+            } else {
+                // Keep SSR locked OFF until Host issues CMD:RESET_FAULT
+                applySSRState(STATE_OFF);
+            }
             latest_v_bus = 0.0f;
             latest_i_amp = 0.0f;
             latest_p_raw = 0.0f;
@@ -627,9 +666,17 @@ void loop() {
                         latest_vib_rms = vibCalculator.update(ax, ay, az);
                         latest_sensor_ok = false;
                     } else {
-                        // Explicit Latched Hardware Fault Trip: Shut down SSRs & lock until RESET_FAULT
+                        // Stop Category 1 Phase 1 (t = 0): Assert hardware Feed Hold (< 1 ms)
                         fault_latched = true;
-                        applySSRState(STATE_OFF);
+                        digitalWrite(PIN_GRBL_FEED_HOLD, LOW);
+                        if (current_state == STATE_CUTTING) {
+                            // Keep PIN_SSR_MAIN HIGH while X/Y/Z axes decelerate safely
+                            fault_decel_active = true;
+                            fault_decel_start_ms = millis();
+                        } else {
+                            fault_decel_active = false;
+                            applySSRState(STATE_OFF);
+                        }
                         latest_v_bus = 0.0f;
                         latest_i_amp = 0.0f;
                         latest_p_raw = 0.0f;
@@ -673,6 +720,8 @@ void loop() {
         doc["sensor_ok"] = latest_sensor_ok;
         doc["fault_latched"] = fault_latched;
         doc["i2c_err_cnt"] = i2c_consecutive_errors;
+        doc["sample_held"] = (i2c_consecutive_errors > 0 && !fault_latched);
+        doc["feed_hold_pin_active"] = (digitalRead(PIN_GRBL_FEED_HOLD) == LOW);
         doc["sim_fallback"] = (!latest_sensor_ok && (ALLOW_SIM_FALLBACK != 0));
 
         serializeJson(doc, Serial);

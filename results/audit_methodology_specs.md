@@ -170,7 +170,7 @@ $$\text{Nếu } CDI(k) > \theta_{\text{th}} \quad \Longrightarrow \quad \text{Ph
 
 Lưới khảo sát độ nhạy ngưỡng $\theta_{\text{th}}$ gồm 10 mốc:
 $$\theta_{\text{th}} \in [0.02, 0.05, 0.08, 0.10, 0.12, 0.15, 0.18, 0.22, 0.35, 0.50]$$
-- Ngưỡng tối ưu Pareto được chọn: **$\theta_{\text{th}} = 0.12$** (Điểm gối - Knee Point).
+- Ngưỡng triển khai chọn $\theta_{\text{th}} = 0.12$ (nằm trong vùng plateau $[0.08, 0.15]$, cực tiểu thực nghiệm `Total_System_Cost_Index` đạt tại $\theta_{\text{th}}^* = 0.08$).
 
 ### 3.3 Cơ Chế Đánh Giá Tương Đối & Reset Điểm Neo (Relative Re-anchoring Mechanism)
 Để khắc phục triệt để hiện tượng kẹt kích hoạt liên tục (chatter re-triggering) sau một biến cố lớn giữa ca, hệ thống áp dụng cơ chế đánh giá gia số tương đối so với mốc đồng bộ gần nhất (`anchor_op_idx`):
@@ -296,12 +296,12 @@ Trong [`tests/test_task5_2_multi_instance_eval.py`](file:///home/neyugn/Document
    Chỉ số IGD đo khoảng cách bình quân từ các điểm thuộc $P^*$ đến nghiệm của thuật toán:
    $$IGD(A, P^*) = \frac{1}{|P^*|} \sum_{v \in P^*} \min_{a \in A} \|v - a\|_2$$
 
-### 5.3 Giải Mã Nghịch Lý Thống Kê Trên Mk05: Vì Sao Right-Shift Đạt HV Cao Hơn (0.5406 vs 0.4188) Nhưng Proposed Lại Đạt Nghiệm Thực Tế Cân Bằng Và 0.00 Gãy Dao?
+### 5.3 Giải Mã Nghịch Lý Thống Kê Trên Mk05: Vì Sao Right-Shift Đạt HV Cao Hơn (0.5143 vs 0.4188) Nhưng Proposed Lại Đạt Nghiệm Thực Tế Cân Bằng Và 0.00 Gãy Dao?
 
 Dữ liệu thực nghiệm thực tế trên `Mk05` (15 test seeds):
 - **Right-Shift Rescheduling:**
-  $\text{Makespan} = 370.30 \pm 28.80\text{ min}$, $\text{TOU Cost} = \$12.343 \pm 0.783$, $\text{TWT} = 4671.8 \pm 761.3\text{ min}$, $\text{Breakdowns} = 0.07$.
-  $\mathbf{HV = 0.5406 \pm 0.1007}, \quad \mathbf{IGD = 0.3302 \pm 0.0283}$.
+  $\text{Makespan} = 375.15 \pm 30.41\text{ min}$, $\text{TOU Cost} = \$12.449 \pm 0.871$, $\text{TWT} = 4744.2 \pm 795.3\text{ min}$, $\text{Breakdowns} = 0.40$.
+  $\mathbf{HV = 0.5143 \pm 0.1067}, \quad \mathbf{IGD = 0.3365 \pm 0.0341}$.
 - **Proposed Cloud-Edge DT:**
   $\text{Makespan} = 408.76 \pm 29.48\text{ min}$, $\text{TOU Cost} = \mathbf{\$11.198 \pm 0.539}$, $\text{TWT} = 5395.5 \pm 800.5\text{ min}$, $\text{Breakdowns} = \mathbf{0.00}$.
   $\mathbf{HV = 0.4188 \pm 0.1046}, \quad \mathbf{IGD = 0.3619 \pm 0.0715}$.
@@ -310,10 +310,10 @@ Dữ liệu thực nghiệm thực tế trên `Mk05` (15 test seeds):
 1. **Bản chất của Hypervolume (HV):**
    HV đo thể tích hình hộp đa chiều giới hạn bởi điểm nghiệm và điểm tham chiếu $(1.1, 1.1, 1.1)$:
    $$HV \approx (1.1 - c_{\text{norm}}) \times (1.1 - \text{cost}_{\text{norm}}) \times (1.1 - \text{twt}_{\text{norm}})$$
-   - Phương pháp `Right-Shift` đạt được Makespan ngắn hơn ($370.3\text{ min}$ so với $408.8\text{ min}$) do nó **hoàn toàn bỏ qua quy trình bảo dưỡng phòng ngừa chủ động theo TOU** (chỉ có 0.07 lần thay dao trong toàn ca). Việc không dừng máy thay dao giúp Right-Shift ép các chi tiết vào gia công liên tục, kéo điểm chuẩn hóa $c_{\text{norm}}$ về gần 0 hơn, làm tăng thể tích bao bọc HV.
+   - Phương pháp `Right-Shift` đạt được Makespan ngắn hơn ($370.3\text{ min}$ so với $408.8\text{ min}$) do nó **hoàn toàn bỏ qua quy trình bảo dưỡng phòng ngừa chủ động theo TOU** (khiến Right-Shift chịu 0.40 lần gãy dao trên Mk05 và 1.47 lần trên Mk03). Việc không dừng máy thay dao giúp Right-Shift ép các chi tiết vào gia công liên tục, kéo điểm chuẩn hóa $c_{\text{norm}}$ về gần 0 hơn, làm tăng thể tích bao bọc HV.
 2. **Bản chất của Tính Cân Bằng & Bảo Trì Thực Tế:**
    - `Proposed Cloud-Edge DT` hạ tốc độ cắt về $s=1$ hoặc chủ động dừng máy thực hiện PM trong giờ cao điểm TOU để triệt tiêu phụ thu giá đỉnh. Điều này kéo dài Makespan danh định nhưng mang lại lợi ích kinh tế và vận hành to lớn:
-     * **Chi phí điện TOU thấp nhất toàn bộ benchmark:** $\$11.198 \pm 0.539$ (thấp hơn $\$12.343$ của Right-Shift, $\$12.697$ của NSGA-III, và $\$19.270$ của SPT).
+     * **Chi phí điện TOU thấp nhất toàn bộ benchmark:** $\$11.198 \pm 0.539$ (tiết kiệm 10.05% so với $\$12.449$ của Right-Shift, thấp hơn $\$12.697$ của NSGA-III và $\$19.270$ của SPT).
      * **Độ trễ công việc (TWT) thấp hơn các thuật toán tiến hóa mở vòng:** $5395.5\,\text{min}$ so với $6100.4\,\text{min}$ của NSGA-III và $6984.4\,\text{min}$ của MOEA-D.
      * **Tuyệt đối an toàn công cụ:** $0.00$ sự cố gãy dao (so với 9.20 lần gãy dao của NSGA-III và 12.67 lần của RVEA).
 3. **Kết luận khoa học:**
@@ -331,7 +331,7 @@ Kịch bản thực nghiệm phần cứng được thiết kế trong [`tests/t
   $$\frac{dw}{dt} = \eta \cdot (v_s)^\beta$$
   Trong đó ở pha 3 ($12\text{s} - 22\text{s}$, $s=1$), độ mòn tăng từ $30.0\,\mu\text{m} \to 38.0\,\mu\text{m}$. Ở pha 4 ($22\text{s} - 42\text{s}$, $s=3$), tốc độ cao đẩy mòn nhanh từ $38.0\,\mu\text{m} \to 84.0\,\mu\text{m}$, vượt ngưỡng cảnh báo $80.0\,\mu\text{m}$.
 - **Khôi phục tín hiệu qua DSP và Hợp nhất Cảm biến (Dual-Sensor Fusion):**
-  1. *Lọc sơ cấp trên ESP32:* Cảm biến công suất INA226 lấy mẫu ở $200\text{ Hz}$ ($5\text{ ms}$), chạy qua bộ lọc trung vị 3 điểm (`compute_median`) để triệt tiêu xung nhiễu PWM động cơ ($+25\text{ W}$), sau đó qua bộ lọc Kalman 1D (`SimpleKalmanFilter1D`). Cảm biến gia tốc ADXL345 lấy mẫu rung động và tính RMS qua cửa sổ trượt 20 mẫu ($100\text{ ms}$).
+  1. *Lọc sơ cấp trên ESP32:* Cảm biến công suất INA226 lấy mẫu ở $200\text{ Hz}$ ($5\text{ ms}$), chạy qua bộ lọc trung vị 3 điểm (`compute_median`) để triệt tiêu xung nhiễu PWM động cơ ($+25\text{ W}$), sau đó qua bộ lọc Kalman 1D (`SimpleKalmanFilter1D`). Cảm biến gia tốc ADXL345 ($\pm 16g$, $200\,\text{Hz}$) và chân phanh cứng `GPIO 27` (`PIN_GRBL_FEED_HOLD`, chờ `Hold:0` trước khi `Soft Reset`/cắt SSR, gắn cờ `sample_held` khi giữ mẫu ZOH 3 chu kỳ I2C $15\,\text{ms}$) ($\pm 16g$, $200\,\text{Hz}$) và chân phanh cứng `GPIO 27` (`PIN_GRBL_FEED_HOLD`, chờ `Hold:0` trước khi `Soft Reset`/cắt SSR, gắn cờ `sample_held` khi giữ mẫu ZOH 3 chu kỳ I2C $15\,\text{ms}$) lấy mẫu rung động và tính RMS qua cửa sổ trượt 20 mẫu ($100\text{ ms}$).
   2. *Nghịch đảo đặc tính mòn:*
      - Từ công suất: $w_p = w_{\max} \cdot \frac{P_{\text{filt}} - P_{\text{base}}}{\gamma \cdot P_{\text{base}}}$, phương sai $\sigma_{w, p}^2 = \left(\frac{w_{\max}}{\gamma P_{\text{base}}}\right)^2 \sigma_p^2$.
      - Từ rung động: $w_v = w_{\max} \cdot \left(\frac{\text{Vib}_{\text{rms}} - \text{Vib}_{\text{base}}}{\kappa \cdot \text{Vib}_{\text{base}}}\right)^{1/\alpha_v}$, phương sai $\sigma_{w, v}^2 = \frac{\sigma_{\text{vib}}^2}{(\partial \text{Vib} / \partial w)^2}$.

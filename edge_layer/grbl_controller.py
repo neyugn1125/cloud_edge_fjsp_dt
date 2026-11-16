@@ -104,6 +104,7 @@ class GRBLHardwareController:
         self.override_history: List[Dict[str, Any]] = []
         self.ssr_commands_history: List[str] = []
         self.sent_bytes_history: List[bytes] = []
+        self.emergency_stop_log: List[str] = []
         self.last_ssr_cmd: Optional[str] = None
 
         if self.mode == "grbl_emulator":
@@ -448,21 +449,69 @@ class GRBLHardwareController:
                 "raw": raw,
             }
 
-    def emergency_stop(self) -> str:
+    def emergency_stop(self, max_poll_s: float = 3.0, poll_interval_s: float = 0.05) -> str:
         """
-        Trigger immediate Feed Hold to decelerate axes safely, wait briefly
-        before issuing Soft Reset, and turn off power SSRs.
+        Execute Stop Category 1 emergency shutdown sequence:
+        1. Send immediate Feed Hold ('!') and flush to decelerate axes.
+        2. In real_serial mode, poll query_status() every poll_interval_s (up to max_poll_s)
+           until GRBL confirms 'Hold:0', 'Idle', or feed <= 1e-3.
+        3. Only after axes stop (or safety timeout), command ESP32 SSR OFF (CMD:OFF)
+           followed by GRBL Soft Reset (0x18).
         """
+        self.emergency_stop_log = []
+
         if self.mode == "real_serial" and self.serial_conn is not None:
+            # Step 1: Immediate hardware Feed Hold
             self.serial_conn.write(self.CMD_FEED_HOLD)
             self.serial_conn.flush()
-            time.sleep(0.15)
+            self.emergency_stop_log.append("FEED_HOLD_SENT")
+
+            # Step 2: Poll GRBL status until axes stop decelerating
+            poll_start = time.monotonic()
+            axes_stopped = False
+            while True:
+                status = self.query_status()
+                raw_frame = status.get("raw", None)
+                valid_reply = (raw_frame is None) or bool(raw_frame)
+                state_str = str(status.get("state", ""))
+                feed_val = float(status.get("feed", 0.0))
+
+                if valid_reply and (state_str in ("Hold:0", "Idle") or feed_val <= 1e-3):
+                    axes_stopped = True
+                    break
+
+                if time.monotonic() - poll_start >= max_poll_s:
+                    logger.warning(
+                        f"Emergency stop poll timed out after {max_poll_s:.2f}s "
+                        f"(last state={state_str!r}, feed={feed_val:.2f}). Proceeding with SSR cutoff."
+                    )
+                    break
+
+                time.sleep(poll_interval_s)
+
+            self.emergency_stop_log.append(
+                "AXES_STOPPED_VERIFIED" if axes_stopped else "AXES_STOP_TIMEOUT"
+            )
+
+            # Step 3: Cut SSRs only after axes stop, then issue Soft Reset (0x18)
+            self.grbl_state = "Hold"
+            self.set_machine_state("OFF")
+            self.emergency_stop_log.append("SSR_OFF_SENT")
+
             self.serial_conn.write(self.CMD_SOFT_RESET)
             self.serial_conn.flush()
+            self.emergency_stop_log.append("SOFT_RESET_SENT")
+        else:
+            self.emergency_stop_log.append("FEED_HOLD_SENT")
+            self.grbl_state = "Hold"
+            self.emergency_stop_log.append("AXES_STOPPED_VERIFIED")
+            self.set_machine_state("OFF")
+            self.emergency_stop_log.append("SSR_OFF_SENT")
+            self.emergency_stop_log.append("SOFT_RESET_SENT")
 
-        self.grbl_state = "Hold"
-        self.set_machine_state("OFF")
-        logger.warning("EMERGENCY STOP TRIGGERED: Feed hold sent, soft reset issued, power SSRs commanded OFF.")
+        logger.warning(
+            "EMERGENCY STOP TRIGGERED: Feed hold verified stopped -> SSR OFF -> Soft reset issued."
+        )
         return "ALARM: EMERGENCY STOP EXECUTED"
 
     def reset_emulator(self) -> None:
@@ -480,5 +529,6 @@ class GRBLHardwareController:
         self.override_history.clear()
         self.ssr_commands_history.clear()
         self.sent_bytes_history.clear()
+        self.emergency_stop_log.clear()
         self.last_ssr_cmd = None
 

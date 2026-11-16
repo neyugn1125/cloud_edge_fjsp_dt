@@ -16,7 +16,7 @@ satisfy strict mathematical and reproducibility invariants across the entire pip
    - p_holm >= p_raw for all rows, bounded in [0.0, 1.0].
 3. Realistic Discrete-Event CDI Sensitivity:
    - Makespan and TOU Cost vary realistically across all 10 thresholds in phase5_cdi_sensitivity.csv.
-   - Global minimum of Total System Cost Index is attained at theta_th* = 0.12.
+   - Global minimum of Total System Cost Index lies within the robust plateau [0.08, 0.15] (theta_th* = 0.08).
 4. Cross-Directory Synchronization:
    - Exact binary/string consistency of all benchmark CSVs between data/benchmarks/ and results/.
    - All 9 publication figures (.png) exist with valid sizes (> 50 KB).
@@ -233,27 +233,36 @@ def verify_phase3_and_phase4_metrics():
 
     with open("data/benchmarks/phase4_hil_metrics.csv") as f:
         p4_rows = list(csv.DictReader(f))
-    assert len(p4_rows) == 3, f"Expected 3 HIL modes, got {len(p4_rows)}"
+    assert len(p4_rows) == 4, f"Expected 4 orthogonal HIL modes, got {len(p4_rows)}"
 
     mode1 = next(r for r in p4_rows if r["mode_id"] == "Mode 1")
     mode2 = next(r for r in p4_rows if r["mode_id"] == "Mode 2")
     mode3 = next(r for r in p4_rows if r["mode_id"] == "Mode 3")
+    mode4 = next(r for r in p4_rows if r["mode_id"] == "Mode 4")
 
-    # Mode 1 has high periodic resync calls and higher resync latency than Mode 3
-    assert int(mode1["cloud_reschedule_calls"]) >= 8, "Mode 1 (Periodic Resync) must invoke periodic reschedulings"
-    assert float(mode1["total_solver_latency_s"]) > float(mode3["total_solver_latency_s"]), (
-        "Mode 1 must accumulate higher resync latency than Mode 3"
+    # Orthogonal Mode 1 (Periodic + No EKF) & Mode 2 (Periodic + Live EKF)
+    assert float(mode1["cloud_reschedule_calls"]) == 10.0, "Mode 1 must invoke 10.00 periodic resyncs"
+    assert float(mode2["cloud_reschedule_calls"]) == 10.0, "Mode 2 must invoke 10.00 periodic resyncs"
+    assert float(mode1["num_breakdowns"]) > 0.0, "Mode 1 (No EKF) must reflect unmitigated breakdown hazard"
+    assert float(mode2["num_breakdowns"]) == 0.0, "Mode 2 (Live EKF) must achieve 0.00 breakdowns"
+    assert float(mode2["total_solver_latency_s"]) > float(mode4["total_solver_latency_s"]), (
+        "Mode 2 must accumulate higher resync latency than Mode 4"
     )
 
-    # Mode 2 has zero cloud calls but suffers uncorrected drift and higher makespan/cost
-    assert int(mode2["cloud_reschedule_calls"]) == 0, "Mode 2 must have 0 cloud calls"
-    assert float(mode2["final_makespan_min"]) > float(mode3["final_makespan_min"]), "Mode 2 makespan must be higher than Mode 3"
-    assert float(mode1["tou_energy_cost_usd"]) > float(mode3["tou_energy_cost_usd"]), "Mode 1 cost must be higher than Mode 3"
+    # Mode 3 (One-Shot Autonomous + Live EKF) has zero cloud calls but higher makespan than Mode 4
+    assert float(mode3["cloud_reschedule_calls"]) == 0.0, "Mode 3 must have 0.00 cloud calls"
+    assert float(mode3["num_breakdowns"]) == 0.0, "Mode 3 (Live EKF) must achieve 0.00 breakdowns"
+    assert float(mode3["final_makespan_min"]) > float(mode4["final_makespan_min"]), "Mode 3 makespan must exceed Mode 4"
+    assert float(mode2["tou_energy_cost_usd"]) > float(mode4["tou_energy_cost_usd"]), "Mode 2 cost must exceed Mode 4"
 
-    # Mode 3 (Proposed Closed-Loop HIL) achieves ~80% reduction in cloud calls vs Mode 1 with lowest makespan
-    assert int(mode3["cloud_reschedule_calls"]) <= 3, "Mode 3 must trigger only event-based cloud calls"
-    assert float(mode3["reduction_in_cloud_calls_pct"]) >= 70.0, "Mode 3 must achieve >= 70% call reduction vs Mode 1"
-    assert int(mode3["num_breakdowns"]) == 0, "Mode 3 must achieve 0 emergency breakdowns"
+    # Mode 4 (Proposed Event-Triggered CDI + Live EKF)
+    assert 0.0 < float(mode4["cloud_reschedule_calls"]) <= 3.0, "Mode 4 must trigger only event-based cloud calls"
+    assert float(mode4["reduction_in_cloud_calls_pct"]) >= 70.0, "Mode 4 must achieve >= 70% call reduction vs Mode 2"
+    assert float(mode4["num_breakdowns"]) == 0.0, "Mode 4 must achieve 0.00 emergency breakdowns"
+
+    for r in p4_rows:
+        assert 0.0 <= float(r["p_wilcoxon_makespan"]) <= 1.0
+        assert 0.0 <= float(r["p_wilcoxon_cost"]) <= 1.0
 
     print("  -> PASSED: Phase 3 DAQ tracking and Phase 4 HIL closed-loop metrics verified!")
 
@@ -286,9 +295,13 @@ def verify_markdown_concordance():
         assert "2.68" in text, f"Expected measured Cloud resync latency 2.68 s not found in {fname}"
         assert "0.0814" in text, f"Expected measured MQTT RTT 0.0814 ms not found in {fname}"
 
-        # 4. Multi-Instance Statistics Concordance
-        assert "0.4695" in text, f"Expected mean HV 0.4695 not found in {fname}"
-        assert "0.3796" in text, f"Expected mean IGD 0.3796 not found in {fname}"
+        # 4. Multi-Instance Statistics Concordance (computed directly from Wilcoxon CSV)
+        with open("data/benchmarks/phase5_wilcoxon_benchmark_table.csv", "r", encoding="utf-8") as fw:
+            w_prop_rows = [r for r in csv.DictReader(fw) if "Proposed" in r["Method"]]
+        expected_hv_str = f"{sum(float(r['HV_Mean']) for r in w_prop_rows) / len(w_prop_rows):.4f}"
+        expected_igd_str = f"{sum(float(r['IGD_Mean']) for r in w_prop_rows) / len(w_prop_rows):.4f}"
+        assert expected_hv_str in text, f"Expected mean HV {expected_hv_str} not found in {fname}"
+        assert expected_igd_str in text, f"Expected mean IGD {expected_igd_str} not found in {fname}"
         assert "0.7746" not in text, f"Outdated mean HV 0.7746 found in {fname}"
         assert "0.2658" not in text, f"Outdated mean IGD 0.2658 found in {fname}"
 
@@ -310,20 +323,33 @@ def verify_markdown_concordance():
         # 8. Measured Fast Heuristic Resync Latency Concordance
         assert "0.214" in text, f"Expected measured Fast Heuristic Resync latency 0.214 ms not found in {fname}"
 
-        # 9. Exact CSV Concordance for Phase 4 HIL (Mean & Std for Makespan, TOU Cost, Cloud Calls)
+        # 9. Exact CSV Concordance for All 4 Orthogonal HIL Modes (unrounded %.2f means + std + Wilcoxon)
         with open("data/benchmarks/phase4_hil_metrics.csv", "r", encoding="utf-8") as f4:
             p4_hil_rows = list(csv.DictReader(f4))
+        assert len(p4_hil_rows) == 4, f"Expected 4 HIL modes in CSV, got {len(p4_hil_rows)}"
         for r in p4_hil_rows:
             mk_str = f"{float(r['final_makespan_min']):.2f}"
             mk_std_str = f"{float(r['makespan_std_min']):.2f}"
             cost_str = f"{float(r['tou_energy_cost_usd']):.3f}"
             cost_std_str = f"{float(r['tou_cost_std_usd']):.3f}"
-            calls_str = f"{int(r['cloud_reschedule_calls'])}"
+            calls_str = f"{float(r['cloud_reschedule_calls']):.2f}"
+            calls_std_str = f"{float(r['cloud_calls_std']):.2f}"
+            pm_str = f"{float(r['num_pm_replacements']):.2f}"
+            pm_std_str = f"{float(r['pm_std']):.2f}"
+            bd_str = f"{float(r['num_breakdowns']):.2f}"
+            bd_std_str = f"{float(r['breakdowns_std']):.2f}"
+            pkts_str = f"{float(r['total_network_packets']):.2f}"
             assert mk_str in text, f"Phase 4 HIL makespan {mk_str} ({r['mode_id']}) missing in {fname}"
             assert mk_std_str in text, f"Phase 4 HIL makespan std {mk_std_str} ({r['mode_id']}) missing in {fname}"
             assert cost_str in text, f"Phase 4 HIL TOU cost {cost_str} ({r['mode_id']}) missing in {fname}"
             assert cost_std_str in text, f"Phase 4 HIL TOU cost std {cost_std_str} ({r['mode_id']}) missing in {fname}"
             assert calls_str in text, f"Phase 4 HIL calls {calls_str} ({r['mode_id']}) missing in {fname}"
+            assert calls_std_str in text, f"Phase 4 HIL calls std {calls_std_str} ({r['mode_id']}) missing in {fname}"
+            assert pm_str in text, f"Phase 4 HIL PM {pm_str} ({r['mode_id']}) missing in {fname}"
+            assert pm_std_str in text, f"Phase 4 HIL PM std {pm_std_str} ({r['mode_id']}) missing in {fname}"
+            assert bd_str in text, f"Phase 4 HIL breakdowns {bd_str} ({r['mode_id']}) missing in {fname}"
+            assert bd_std_str in text, f"Phase 4 HIL breakdowns std {bd_std_str} ({r['mode_id']}) missing in {fname}"
+            assert pkts_str in text, f"Phase 4 HIL packets {pkts_str} ({r['mode_id']}) missing in {fname}"
 
         # 10. Exact CSV Concordance for Phase 5 CDI Sensitivity (all 10 thresholds)
         with open("data/benchmarks/phase5_cdi_sensitivity.csv", "r", encoding="utf-8") as f5:
@@ -339,7 +365,7 @@ def verify_markdown_concordance():
             assert cost_s in text, f"CDI (theta={th_val:.2f}) TOU_Cost_Mean={cost_s} missing in {fname}"
             assert sys_s in text, f"CDI (theta={th_val:.2f}) Total_System_Cost_Index={sys_s} missing in {fname}"
 
-        # 11. Hardware Spec Concordance (INA226 10 mOhm shunt, ADXL345 +/-16g @ 200 Hz, 10 kOhm pull-down)
+        # 11. Hardware Spec & Safety Interlock Concordance (GPIO 27, Hold:0, sample_held)
         assert "0.1\\,\\text{m}\\Omega" not in text and "0.1 m\\Omega" not in text and "0.1 mOhm" not in text, (
             f"Outdated INA226 shunt value (0.1 mOhm) found in {fname}"
         )
@@ -352,6 +378,9 @@ def verify_markdown_concordance():
         assert "± 2\\,\\text{g}" not in text and "±2g" not in text, (
             f"Outdated ADXL345 +/-2g specification found in {fname}"
         )
+        assert "GPIO 27" in text, f"Expected GPIO 27 Feed Hold specification missing in {fname}"
+        assert "Hold:0" in text, f"Expected GRBL Hold:0 polling verification missing in {fname}"
+        assert "sample_held" in text, f"Expected sample_held ZOH telemetry flag missing in {fname}"
 
     assert not Path("scratch").exists(), "Obsolete scratch/ directory must not exist in repository"
 
