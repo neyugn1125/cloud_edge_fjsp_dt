@@ -299,10 +299,12 @@ def run_phase5_cdi_sensitivity(
     [0.02, 0.05, 0.08, 0.10, 0.12, 0.15, 0.18, 0.22, 0.35, 0.50]
     evaluated across 10 validation seeds (VAL_SEEDS = [201..210]).
     Demonstrates the communication overhead vs. schedule optimality trade-off,
-    establishing theta_th in [0.08, 0.15] as the Robust Operating Plateau and
-    theta_th = 0.12 as the Selected Operating Center.
+    classifying operating regions objectively against N_shocks = 2.0 discrete macro-shocks:
+    - calls_m > 2.0: Over-Triggering Region (> 2 Shocks)
+    - 1.0 <= calls_m <= 2.0: Event-Matched Plateau (1–2 Shocks)
+    - calls_m < 1.0: Under-Triggering Region (< 1 Shock)
 
-    Shared simulation with Task 4.3 Full HIL closed-loop evaluation engine.
+    Shared simulation with Task 4.3 Full HIL closed-loop evaluation engine (Mode 5).
     """
     Path(output_csv_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -321,7 +323,7 @@ def run_phase5_cdi_sensitivity(
         comm_overhead_l: List[float] = []
 
         for s in seeds:
-            res = run_closed_loop_hil_simulation(seed=s, mode=4, cdi_threshold=th)
+            res = run_closed_loop_hil_simulation(seed=s, mode=5, cdi_threshold=th)
             calls_l.append(float(res["cloud_calls"]))
             cmax_l.append(float(res["makespan_min"]))
             cost_l.append(float(res["tou_cost_usd"]))
@@ -347,13 +349,13 @@ def run_phase5_cdi_sensitivity(
         # Total System Cost Index (incorporating cloud communication and computation overhead)
         total_sys_cost_idx = 0.45 * (cmax_m / cmax_nominal) + 0.45 * (cost_m / cost_nominal) + 0.10 * (calls_m / 10.0)
 
-        # Data-driven operating zone classification based on empirical statistical behavior
-        if calls_m >= 2.5:
-            zone = "Over-Triggering Region"
-        elif calls_m <= 1.0 and max_cdi_m >= 0.19:
-            zone = "Uncorrected Drift Region"
+        # Objective operating zone classification strictly anchored to N_shocks = 2.0 macro-disturbances
+        if calls_m > 2.0:
+            zone = "Over-Triggering Region (> 2 Shocks)"
+        elif calls_m >= 1.0:
+            zone = "Event-Matched Plateau (1–2 Shocks)"
         else:
-            zone = "Robust Operating Plateau"
+            zone = "Under-Triggering Region (< 1 Shock)"
 
         rec = {
             "CDI_Threshold": th,
@@ -567,10 +569,10 @@ def plot_phase5_ablation_and_sensitivity(
     y_twin_max = max(max(total_sys_costs), max(sched_composite)) + 0.14
     ax2_twin.set_ylim(y_twin_min, y_twin_max)
 
-    # Dynamically extract data-driven zone boundaries from sensitivity_rows
-    over_ths = [float(r["CDI_Threshold"]) for r in sensitivity_rows if r.get("Zone") == "Over-Triggering Region"]
-    plateau_ths = [float(r["CDI_Threshold"]) for r in sensitivity_rows if r.get("Zone") == "Robust Operating Plateau"]
-    drift_ths = [float(r["CDI_Threshold"]) for r in sensitivity_rows if r.get("Zone") == "Uncorrected Drift Region"]
+    # Dynamically extract objective N_shocks=2.0 zone boundaries from sensitivity_rows
+    over_ths = [float(r["CDI_Threshold"]) for r in sensitivity_rows if r.get("Zone") == "Over-Triggering Region (> 2 Shocks)"]
+    plateau_ths = [float(r["CDI_Threshold"]) for r in sensitivity_rows if r.get("Zone") == "Event-Matched Plateau (1–2 Shocks)"]
+    drift_ths = [float(r["CDI_Threshold"]) for r in sensitivity_rows if r.get("Zone") == "Under-Triggering Region (< 1 Shock)"]
 
     min_plateau_th = min(plateau_ths) if plateau_ths else 0.08
     max_plateau_th = max(plateau_ths) if plateau_ths else 0.15
@@ -579,20 +581,20 @@ def plot_phase5_ablation_and_sensitivity(
     right_bound = 0.5 * (max_plateau_th + drift_min_th) if drift_ths else (max_plateau_th + 0.015)
 
     # Shaded Zones aligned identically with CSV Zone classifications
-    ax2.axvspan(0.015, left_bound, color="#E74C3C", alpha=0.10, label="Over-Triggering Region")
+    ax2.axvspan(0.015, left_bound, color="#E74C3C", alpha=0.10, label="Over-Triggering (> 2 Shocks)")
     ax2.axvspan(
         left_bound,
         right_bound,
         color="#2ECC71",
         alpha=0.14,
-        label=f"Robust Operating Plateau ({min_plateau_th:.2f}–{max_plateau_th:.2f})",
+        label=f"Event-Matched Plateau ({min_plateau_th:.2f}–{max_plateau_th:.2f})",
     )
-    ax2.axvspan(right_bound, 0.52, color="#F39C12", alpha=0.10, label="Uncorrected Drift Region")
+    ax2.axvspan(right_bound, 0.52, color="#F39C12", alpha=0.10, label="Under-Triggering (< 1 Shock)")
 
     # Degradation Cliff Marker
     ax2.axvline(right_bound, color="#E67E22", linestyle=":", linewidth=2.0, alpha=0.85)
     ax2.annotate(
-        f"Degradation Cliff\n(Unmitigated Drift: θ_th ≥ {drift_min_th:.2f})",
+        f"Degradation Cliff\n(Under-Triggering: θ_th ≥ {drift_min_th:.2f})",
         xy=(right_bound, 0.58 * max_calls_upper),
         xytext=(right_bound + 0.03, 0.72 * max_calls_upper),
         arrowprops=dict(facecolor="#E67E22", edgecolor="black", arrowstyle="->", lw=1.2),
@@ -612,10 +614,10 @@ def plot_phase5_ablation_and_sensitivity(
     ax2_twin.annotate(
         f"Empirical Optimum (θ_th* = {opt_th:.2f}):\n"
         f"• Minimum Total System Cost Index ({opt_sys_cost:.4f}, calls={opt_calls:.2f})\n"
-        f"• Robust Plateau θ_th in [{min_plateau_th:.2f}, {max_plateau_th:.2f}] "
-        f"({makespans[th_vals.index(min_plateau_th)]:.1f}m–{makespans[th_vals.index(max_plateau_th)]:.1f}m; "
+        f"• Event-Matched Plateau θ_th in [{min_plateau_th:.2f}, {max_plateau_th:.2f}] (1–2 Shocks)\n"
+        f"  ({makespans[th_vals.index(min_plateau_th)]:.1f}m–{makespans[th_vals.index(max_plateau_th)]:.1f}m; "
         f"θ=0.12 -> {cloud_calls[th_vals.index(0.12)]:.2f} calls)\n"
-        f"• θ_th ≥ {drift_min_th:.2f} cuts calls to 0–1 but degrades Makespan to {makespans[-1]:.1f}m",
+        f"• θ_th ≥ {drift_min_th:.2f} drops < 1 call & degrades Makespan to {makespans[-1]:.1f}m",
         xy=(opt_th, opt_sys_cost),
         xytext=(0.18, y_twin_min + 0.015),
         arrowprops=dict(facecolor="#27AE60", edgecolor="black", arrowstyle="->", lw=1.5),

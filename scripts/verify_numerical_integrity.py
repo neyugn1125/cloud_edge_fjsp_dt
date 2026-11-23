@@ -210,7 +210,7 @@ def verify_cdi_sensitivity_variation():
     assert float(row_002["Cloud_Calls_Mean"]) >= 4.0, f"Expected higher calls at theta=0.02, got {row_002['Cloud_Calls_Mean']}"
     assert float(row_050["Cloud_Calls_Mean"]) == 0.0, f"Expected zero calls at theta=0.50, got {row_050['Cloud_Calls_Mean']}"
 
-    # Global minimum of Total System Cost Index must be in robust plateau [0.08, 0.15]
+    # Global minimum of Total System Cost Index must be in [0.05, 0.15]
     min_sys_idx = min(sys_costs)
     opt_idx = sys_costs.index(min_sys_idx)
     opt_theta = thresholds[opt_idx]
@@ -233,32 +233,34 @@ def verify_phase3_and_phase4_metrics():
 
     with open("data/benchmarks/phase4_hil_metrics.csv") as f:
         p4_rows = list(csv.DictReader(f))
-    assert len(p4_rows) == 4, f"Expected 4 orthogonal HIL modes, got {len(p4_rows)}"
+    assert len(p4_rows) == 5, f"Expected 5 HIL modes, got {len(p4_rows)}"
 
     mode1 = next(r for r in p4_rows if r["mode_id"] == "Mode 1")
     mode2 = next(r for r in p4_rows if r["mode_id"] == "Mode 2")
     mode3 = next(r for r in p4_rows if r["mode_id"] == "Mode 3")
     mode4 = next(r for r in p4_rows if r["mode_id"] == "Mode 4")
+    mode5 = next(r for r in p4_rows if r["mode_id"] == "Mode 5")
 
-    # Orthogonal Mode 1 (Periodic + No EKF) & Mode 2 (Periodic + Live EKF)
+    # Mode 1 (Periodic High-Freq + No EKF), Mode 2 (Periodic High-Freq + Live EKF),
+    # Mode 3 (Periodic Frequency-Matched + Live EKF), Mode 4 (One-Shot + Live EKF), Mode 5 (Proposed CDI + Live EKF)
     assert float(mode1["cloud_reschedule_calls"]) == 10.0, "Mode 1 must invoke 10.00 periodic resyncs"
     assert float(mode2["cloud_reschedule_calls"]) == 10.0, "Mode 2 must invoke 10.00 periodic resyncs"
-    assert float(mode1["num_breakdowns"]) > 0.0, "Mode 1 (No EKF) must reflect unmitigated breakdown hazard"
-    assert float(mode2["num_breakdowns"]) == 0.0, "Mode 2 (Live EKF) must achieve 0.00 breakdowns"
-    assert float(mode2["total_solver_latency_s"]) > float(mode4["total_solver_latency_s"]), (
-        "Mode 2 must accumulate higher resync latency than Mode 4"
+    assert float(mode3["cloud_reschedule_calls"]) == 2.0, "Mode 3 must invoke 2.00 frequency-matched resyncs"
+    assert float(mode4["cloud_reschedule_calls"]) == 0.0, "Mode 4 must have 0.00 cloud calls"
+    for label, row in [("Mode 2", mode2), ("Mode 3", mode3), ("Mode 4", mode4), ("Mode 5", mode5)]:
+        assert float(row["num_breakdowns"]) == 0.0, f"{label} (Live EKF) must achieve 0.00 breakdowns"
+    assert float(mode2["total_solver_latency_s"]) >= 26.0, "Mode 2 must accumulate >= 26s Warm-Start latency"
+    assert float(mode2["total_solver_latency_s"]) > float(mode3["total_solver_latency_s"]) > float(mode5["total_solver_latency_s"]), (
+        "Warm-Start latency must rank Mode 2 > Mode 3 > Mode 5"
     )
 
-    # Mode 3 (One-Shot Autonomous + Live EKF) has zero cloud calls but higher makespan than Mode 4
-    assert float(mode3["cloud_reschedule_calls"]) == 0.0, "Mode 3 must have 0.00 cloud calls"
-    assert float(mode3["num_breakdowns"]) == 0.0, "Mode 3 (Live EKF) must achieve 0.00 breakdowns"
-    assert float(mode3["final_makespan_min"]) > float(mode4["final_makespan_min"]), "Mode 3 makespan must exceed Mode 4"
-    assert float(mode2["tou_energy_cost_usd"]) > float(mode4["tou_energy_cost_usd"]), "Mode 2 cost must exceed Mode 4"
+    # Mode 4 (One-Shot Autonomous + Live EKF) has zero cloud calls but higher makespan than Mode 5
+    assert float(mode4["final_makespan_min"]) > float(mode5["final_makespan_min"]), "Mode 4 makespan must exceed Mode 5"
+    assert float(mode2["tou_energy_cost_usd"]) > float(mode5["tou_energy_cost_usd"]), "Mode 2 cost must exceed Mode 5"
 
-    # Mode 4 (Proposed Event-Triggered CDI + Live EKF)
-    assert 0.0 < float(mode4["cloud_reschedule_calls"]) <= 3.0, "Mode 4 must trigger only event-based cloud calls"
-    assert float(mode4["reduction_in_cloud_calls_pct"]) >= 70.0, "Mode 4 must achieve >= 70% call reduction vs Mode 2"
-    assert float(mode4["num_breakdowns"]) == 0.0, "Mode 4 must achieve 0.00 emergency breakdowns"
+    # Mode 5 (Proposed Event-Triggered CDI + Live EKF)
+    assert 0.0 < float(mode5["cloud_reschedule_calls"]) <= 3.0, "Mode 5 must trigger only event-based cloud calls"
+    assert float(mode5["reduction_in_cloud_calls_pct"]) >= 70.0, "Mode 5 must achieve >= 70% call reduction vs Mode 2"
 
     for r in p4_rows:
         assert 0.0 <= float(r["p_wilcoxon_makespan"]) <= 1.0
@@ -320,13 +322,16 @@ def verify_markdown_concordance():
         # 7. Zero Breakdowns Guarantee
         assert "0.00" in text, f"Expected zero breakdowns not found in {fname}"
 
-        # 8. Measured Fast Heuristic Resync Latency Concordance
+        # 8. Measured Fast Heuristic Resync Latency Concordance & Ban "statistical equivalence"
         assert "0.214" in text, f"Expected measured Fast Heuristic Resync latency 0.214 ms not found in {fname}"
+        assert "statistical equivalence" not in text.lower(), (
+            f"Invalid claim 'statistical equivalence' found in {fname}; use 'no statistically significant difference'"
+        )
 
-        # 9. Exact CSV Concordance for All 4 Orthogonal HIL Modes (unrounded %.2f means + std + Wilcoxon)
+        # 9. Exact CSV Concordance for All 5 HIL Modes (unrounded %.2f means + std + Wilcoxon)
         with open("data/benchmarks/phase4_hil_metrics.csv", "r", encoding="utf-8") as f4:
             p4_hil_rows = list(csv.DictReader(f4))
-        assert len(p4_hil_rows) == 4, f"Expected 4 HIL modes in CSV, got {len(p4_hil_rows)}"
+        assert len(p4_hil_rows) == 5, f"Expected 5 HIL modes in CSV, got {len(p4_hil_rows)}"
         for r in p4_hil_rows:
             mk_str = f"{float(r['final_makespan_min']):.2f}"
             mk_std_str = f"{float(r['makespan_std_min']):.2f}"

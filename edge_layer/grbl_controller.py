@@ -66,6 +66,8 @@ class GRBLHardwareController:
         baudrate: int = 115200,
         timeout: float = 1.0,
         esp32_interface: Optional[Any] = None,
+        grbl_max_rate_mm_min: float = 1000.0,
+        grbl_accel_mm_s2: float = 10.0,
     ):
         """
         Initialize the GRBL Hardware Controller.
@@ -76,12 +78,16 @@ class GRBLHardwareController:
             baudrate: Baud rate for communication (GRBL v1.1 default is 115200).
             timeout: Serial read timeout in seconds.
             esp32_interface: Optional BreadboardDAQInterface or ESP32 serial interface for SSR control.
+            grbl_max_rate_mm_min: GRBL $110 maximum axis feed rate (mm/min).
+            grbl_accel_mm_s2: GRBL $120 axis acceleration (mm/s^2).
         """
         self.mode = mode
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
         self.esp32_interface = esp32_interface
+        self.grbl_max_rate_mm_min: float = float(grbl_max_rate_mm_min)
+        self.grbl_accel_mm_s2: float = float(grbl_accel_mm_s2)
 
         self.serial_conn: Optional[Any] = None
         self.is_connected: bool = False
@@ -449,15 +455,40 @@ class GRBLHardwareController:
                 "raw": raw,
             }
 
-    def emergency_stop(self, max_poll_s: float = 3.0, poll_interval_s: float = 0.05) -> str:
+    @staticmethod
+    def compute_decel_timeout_s(
+        max_rate_mm_min: float = 1000.0,
+        accel_mm_s2: float = 10.0,
+        margin_s: float = 0.833,
+    ) -> float:
+        """
+        Compute worst-case kinematic axis deceleration timeout from GRBL $110 and $120
+        plus safety margin, synchronized with ESP32 SPINDLE_DECEL_WAIT_MS (2500 ms).
+        """
+        if accel_mm_s2 <= 0.0:
+            raise ValueError(f"accel_mm_s2 must be positive, got {accel_mm_s2}")
+        return (float(max_rate_mm_min) / 60.0) / float(accel_mm_s2) + float(margin_s)
+
+    def emergency_stop(
+        self,
+        max_poll_s: Optional[float] = None,
+        poll_interval_s: float = 0.05,
+    ) -> str:
         """
         Execute Stop Category 1 emergency shutdown sequence:
         1. Send immediate Feed Hold ('!') and flush to decelerate axes.
-        2. In real_serial mode, poll query_status() every poll_interval_s (up to max_poll_s)
+        2. In real_serial mode, poll query_status() every poll_interval_s (up to max_poll_s,
+           defaulting to kinematic decel timeout from $110/$120 ~= 2.50 s)
            until GRBL confirms 'Hold:0', 'Idle', or feed <= 1e-3.
         3. Only after axes stop (or safety timeout), command ESP32 SSR OFF (CMD:OFF)
            followed by GRBL Soft Reset (0x18).
         """
+        if max_poll_s is None:
+            max_poll_s = self.compute_decel_timeout_s(
+                self.grbl_max_rate_mm_min,
+                self.grbl_accel_mm_s2,
+            )
+
         self.emergency_stop_log = []
 
         if self.mode == "real_serial" and self.serial_conn is not None:

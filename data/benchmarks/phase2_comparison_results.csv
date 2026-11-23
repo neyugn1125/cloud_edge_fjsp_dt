@@ -3,7 +3,7 @@ Rule 1 (SPT + Fast Speed),116.22,1.57,3.127,0.118,22.117,0.085,550.67,27.24,0.00
 Rule 2 (EET + Eco Speed),94.67,2.49,2.455,0.043,19.092,0.051,424.08,11.26,3.27,0.00,< 0.1 ms,Heuristic Rule
 Rule 3 (EDD + Balanced Speed),124.55,8.38,3.662,0.070,26.760,0.198,544.26,80.72,6.73,0.00,< 0.1 ms,Heuristic Rule
 Rule 4 (Random Valid Policy),110.50,19.58,4.021,0.300,27.154,1.324,781.90,285.33,5.73,1.07,< 0.1 ms,Random Baseline
-Right-Shift Rescheduling (Reactive Baseline),79.58,5.95,2.594,0.152,18.856,0.285,321.09,95.12,4.27,0.00,< 0.1 ms,Reactive Dynamic Dispatch
+Right-Shift Rescheduling (Reactive Baseline),81.17,6.74,2.546,0.120,18.757,0.353,345.78,99.39,5.13,0.00,< 0.1 ms,Reactive Dynamic Dispatch
 NSGA-II Open-Loop (Static Cloud Schedule without Edge Twin),82.69,11.90,2.573,0.199,18.997,0.457,365.37,159.79,2.00,0.73,4.24 ± 0.03 s,Cloud Offline Optimization (Open-Loop)
 MOEA-D Open-Loop (Static Cloud Schedule without Edge Twin),79.77,10.15,2.606,0.127,19.436,0.509,323.17,128.23,2.20,0.80,4.24 ± 0.03 s,Cloud Offline Optimization (Open-Loop)
 RVEA Open-Loop (Static Cloud Schedule without Edge Twin),67.47,10.34,3.052,0.368,19.653,0.632,183.99,105.62,2.67,0.60,4.24 ± 0.03 s,Cloud Offline Optimization (Open-Loop)

@@ -139,6 +139,11 @@ class EdgeDigitalTwinNode:
         self.current_wear_um: float = 0.0
         self.estimated_wear_um: float = 0.0
 
+        # Host Telemetry Heartbeat Watchdog (300 ms = 3 missed 10 Hz frames)
+        self.telemetry_watchdog_timeout_ms: float = 300.0
+        self.last_valid_telemetry_ts_ms: Optional[float] = None
+        self.watchdog_tripped: bool = False
+
         # Baseline schedule storage
         self.baseline_schedule: Optional[Dict[str, Any]] = None
         self.operations_schedule: List[Dict[str, Any]] = []
@@ -288,6 +293,82 @@ class EdgeDigitalTwinNode:
             f"[{self.machine_id}] Baseline schedule updated from Cloud. CDI successfully reset to 0.0."
         )
         return True
+
+    # ==========================================================================
+    # Telemetry Heartbeat Watchdog & Safety Emergency Stop
+    # ==========================================================================
+
+    def _trigger_safety_emergency_stop(
+        self,
+        reason: str,
+        details: Dict[str, Any],
+        call_emergency_stop: bool = True,
+        is_watchdog: bool = False,
+    ) -> None:
+        """
+        Execute GRBL Stop Category 1 emergency stop ('!' Feed Hold over Serial)
+        and emit Cloud reschedule trigger on sensor fault or telemetry watchdog trip.
+        """
+        if is_watchdog:
+            self.watchdog_tripped = True
+        if call_emergency_stop:
+            self.grbl.emergency_stop()
+        self.trigger_cloud_reschedule = True
+        self.last_trigger_payload = RescheduleTriggerPayload(
+            machine_id=self.machine_id,
+            reason=reason,
+            cdi=self.cdi,
+            cdi_threshold=self.cdi_threshold,
+            current_wear_um=self.estimated_wear_um,
+            timestamp=float(self.c_actual),
+            details=details,
+        )
+        if self.mqtt_client is not None and getattr(self.mqtt_client, "is_connected", False):
+            self.mqtt_client.trigger_reschedule(
+                machine_id=self.machine_id,
+                reason=reason,
+                cdi=self.cdi,
+                cdi_threshold=self.cdi_threshold,
+                current_wear_um=self.estimated_wear_um,
+                details=self.last_trigger_payload.details,
+            )
+
+    def check_telemetry_watchdog(self, current_time_ms: float) -> bool:
+        """
+        Verify ESP32 10 Hz telemetry heartbeat against telemetry_watchdog_timeout_ms (300 ms).
+
+        If elapsed time since the last valid telemetry exceeds telemetry_watchdog_timeout_ms
+        (3 missed consecutive 10 Hz frames) or ts_ms regresses due to unannounced MCU reset,
+        immediately commands GRBL emergency_stop() ('!' Feed Hold) directly over Serial.
+
+        Args:
+            current_time_ms: Timestamp (ms) of current observation or monotonic clock.
+
+        Returns:
+            bool: True if watchdog tripped, False if heartbeat is healthy.
+        """
+        if self.last_valid_telemetry_ts_ms is None:
+            return False
+
+        elapsed_ms = float(current_time_ms) - float(self.last_valid_telemetry_ts_ms)
+        if elapsed_ms < 0.0 or elapsed_ms > self.telemetry_watchdog_timeout_ms:
+            logger.error(
+                f"[{self.machine_id}] Host telemetry watchdog tripped: gap={elapsed_ms:.1f} ms "
+                f"(timeout={self.telemetry_watchdog_timeout_ms:.1f} ms). Issuing GRBL emergency_stop()."
+            )
+            self._trigger_safety_emergency_stop(
+                reason="TELEMETRY_WATCHDOG_TIMEOUT",
+                details={
+                    "elapsed_ms": elapsed_ms,
+                    "last_valid_telemetry_ts_ms": self.last_valid_telemetry_ts_ms,
+                    "current_time_ms": float(current_time_ms),
+                    "timeout_ms": self.telemetry_watchdog_timeout_ms,
+                },
+                call_emergency_stop=True,
+                is_watchdog=True,
+            )
+            return True
+        return False
 
     # ==========================================================================
     # Action Decoding and Local Control Inference
@@ -463,36 +544,12 @@ class EdgeDigitalTwinNode:
         delta_wear = 0.8 * (v_s**2.0) * (t_actual) * float(disturbance_factor)
         self.current_wear_um = min(self.w_max_um, self.current_wear_um + delta_wear)
 
-        # Update DAQ hardware emulator & check sensor safety before wear estimation
-        self.daq.set_operating_conditions(speed_level=speed_level, true_wear_um=self.current_wear_um)
-        telemetry = self.daq.read_telemetry(dt_ms=100)
-        if not telemetry.get("sensor_ok", True) or telemetry.get("fault_latched", False):
-            self.grbl.emergency_stop()
-            self.trigger_cloud_reschedule = True
-            self.last_trigger_payload = RescheduleTriggerPayload(
-                machine_id=self.machine_id,
-                reason="SENSOR_FAULT",
-                cdi=self.cdi,
-                cdi_threshold=self.cdi_threshold,
-                current_wear_um=self.estimated_wear_um,
-                timestamp=float(self.c_actual),
-                details={
-                    "sensor_ok": telemetry.get("sensor_ok", False),
-                    "fault_latched": telemetry.get("fault_latched", False),
-                    "i2c_err_cnt": telemetry.get("i2c_err_cnt", 0),
-                    "op_id": op_data.get("op_id", "OP_DEFAULT"),
-                },
-            )
-            if self.mqtt_client is not None and getattr(self.mqtt_client, "is_connected", False):
-                self.mqtt_client.trigger_reschedule(
-                    machine_id=self.machine_id,
-                    reason="SENSOR_FAULT",
-                    cdi=self.cdi,
-                    cdi_threshold=self.cdi_threshold,
-                    current_wear_um=self.estimated_wear_um,
-                    details=self.last_trigger_payload.details,
-                )
-            step_result = {
+        def _package_step_result(
+            cdi_value: float,
+            sensor_fault_stop: bool = False,
+            watchdog_tripped: bool = False,
+        ) -> Dict[str, Any]:
+            res = {
                 "op_id": op_data.get("op_id", "OP_DEFAULT"),
                 "speed_level": speed_level,
                 "speed_factor": v_s,
@@ -503,17 +560,88 @@ class EdgeDigitalTwinNode:
                 "c_base": self.c_base,
                 "e_actual": self.e_actual,
                 "e_base": self.e_base,
-                "cdi": self.cdi,
+                "cdi": cdi_value,
                 "trigger_cloud_reschedule": self.trigger_cloud_reschedule,
-                "sensor_fault_stop": True,
+                "sensor_fault_stop": sensor_fault_stop,
+                "watchdog_tripped": watchdog_tripped,
                 "estimated_wear_um": self.estimated_wear_um,
                 "override_info": override_info,
                 "gcode_sent": gcode_cmd,
                 "gcode_resp": gcode_resp,
             }
-            self.completed_operations.append(step_result)
-            return step_result
+            self.completed_operations.append(res)
+            return res
 
+        # Update DAQ hardware emulator & guard with 300 ms Host Telemetry Watchdog
+        self.daq.set_operating_conditions(speed_level=speed_level, true_wear_um=self.current_wear_um)
+        t_read_start_ms = time.monotonic() * 1000.0
+        try:
+            telemetry = self.daq.read_telemetry(dt_ms=100)
+        except (TimeoutError, ConnectionError) as exc:
+            read_elapsed_ms = (time.monotonic() * 1000.0) - t_read_start_ms
+            logger.error(
+                f"[{self.machine_id}] ESP32 telemetry failure ({type(exc).__name__}: {exc}). "
+                "Host watchdog executing GRBL Feed Hold ('!') over Serial."
+            )
+            self._trigger_safety_emergency_stop(
+                reason="TELEMETRY_WATCHDOG_TIMEOUT",
+                details={
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "read_elapsed_ms": read_elapsed_ms,
+                    "timeout_ms": self.telemetry_watchdog_timeout_ms,
+                    "op_id": op_data.get("op_id", "OP_DEFAULT"),
+                },
+                call_emergency_stop=True,
+                is_watchdog=True,
+            )
+            return _package_step_result(self.cdi, sensor_fault_stop=False, watchdog_tripped=True)
+
+        read_elapsed_ms = (time.monotonic() * 1000.0) - t_read_start_ms
+        if read_elapsed_ms > self.telemetry_watchdog_timeout_ms:
+            logger.error(
+                f"[{self.machine_id}] Telemetry read duration {read_elapsed_ms:.1f} ms exceeded "
+                f"{self.telemetry_watchdog_timeout_ms:.1f} ms watchdog limit. Issuing GRBL Feed Hold."
+            )
+            self._trigger_safety_emergency_stop(
+                reason="TELEMETRY_WATCHDOG_TIMEOUT",
+                details={
+                    "read_elapsed_ms": read_elapsed_ms,
+                    "timeout_ms": self.telemetry_watchdog_timeout_ms,
+                    "op_id": op_data.get("op_id", "OP_DEFAULT"),
+                },
+                call_emergency_stop=True,
+                is_watchdog=True,
+            )
+            return _package_step_result(self.cdi, sensor_fault_stop=False, watchdog_tripped=True)
+
+        packet_ts_ms = telemetry.get("ts_ms")
+        current_ts_ms = (
+            float(packet_ts_ms)
+            if isinstance(packet_ts_ms, (int, float))
+            else (time.monotonic() * 1000.0)
+        )
+        if self.check_telemetry_watchdog(current_ts_ms):
+            if self.last_trigger_payload is not None:
+                self.last_trigger_payload.details["op_id"] = op_data.get("op_id", "OP_DEFAULT")
+            return _package_step_result(self.cdi, sensor_fault_stop=False, watchdog_tripped=True)
+
+        if not telemetry.get("sensor_ok", True) or telemetry.get("fault_latched", False):
+            self._trigger_safety_emergency_stop(
+                reason="SENSOR_FAULT",
+                details={
+                    "sensor_ok": telemetry.get("sensor_ok", False),
+                    "fault_latched": telemetry.get("fault_latched", False),
+                    "i2c_err_cnt": telemetry.get("i2c_err_cnt", 0),
+                    "op_id": op_data.get("op_id", "OP_DEFAULT"),
+                },
+                call_emergency_stop=True,
+                is_watchdog=False,
+            )
+            return _package_step_result(self.cdi, sensor_fault_stop=True, watchdog_tripped=False)
+
+        self.last_valid_telemetry_ts_ms = current_ts_ms
+        self.watchdog_tripped = False
         self.estimated_wear_um = self.wear_estimator.estimate_wear(telemetry, speed_level=speed_level)
 
         # Step 6: Cumulative Tracking and CDI Computation
@@ -528,24 +656,4 @@ class EdgeDigitalTwinNode:
         self.grbl.set_machine_state("STANDBY")
 
         # Step 8: Package record
-        step_result = {
-            "op_id": op_data.get("op_id", "OP_DEFAULT"),
-            "speed_level": speed_level,
-            "speed_factor": v_s,
-            "pm_done": pm_done,
-            "t_actual_min": t_actual,
-            "e_actual_kwh": e_actual,
-            "c_actual": self.c_actual,
-            "c_base": self.c_base,
-            "e_actual": self.e_actual,
-            "e_base": self.e_base,
-            "cdi": cdi_val,
-            "trigger_cloud_reschedule": self.trigger_cloud_reschedule,
-            "sensor_fault_stop": False,
-            "estimated_wear_um": self.estimated_wear_um,
-            "override_info": override_info,
-            "gcode_sent": gcode_cmd,
-            "gcode_resp": gcode_resp,
-        }
-        self.completed_operations.append(step_result)
-        return step_result
+        return _package_step_result(cdi_val, sensor_fault_stop=False, watchdog_tripped=False)

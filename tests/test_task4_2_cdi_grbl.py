@@ -578,4 +578,151 @@ def test_grbl_emergency_stop_timeout_still_executes_ssr_off_and_reset():
     assert timeline[-1] == ("GRBL", b"\x18")
 
 
+def test_grbl_compute_decel_timeout_from_grbl_params():
+    """
+    Verify GRBLHardwareController.compute_decel_timeout_s() computes kinematic deceleration
+    timeout from GRBL $110 (max_rate_mm_min=1000.0) and $120 (accel_mm_s2=10.0) + 0.833 s
+    margin (~2.50 s), synchronized with ESP32 SPINDLE_DECEL_WAIT_MS = 2500 ms.
+    """
+    timeout_s = GRBLHardwareController.compute_decel_timeout_s(1000.0, 10.0, 0.833)
+    assert timeout_s == pytest.approx(2.50, abs=1e-3)
+
+    ctrl = GRBLHardwareController(mode="grbl_emulator")
+    assert ctrl.grbl_max_rate_mm_min == pytest.approx(1000.0)
+    assert ctrl.grbl_accel_mm_s2 == pytest.approx(10.0)
+    assert ctrl.compute_decel_timeout_s(ctrl.grbl_max_rate_mm_min, ctrl.grbl_accel_mm_s2) == pytest.approx(
+        2.50, abs=1e-3
+    )
+
+    with pytest.raises(ValueError):
+        GRBLHardwareController.compute_decel_timeout_s(1000.0, 0.0, 0.833)
+
+
+def test_edge_node_telemetry_watchdog_trips_grbl_emergency_stop_on_esp32_timeout():
+    """
+    Verify Host Telemetry Heartbeat Watchdog (300 ms) in EdgeDigitalTwinNode:
+    1. When daq.read_telemetry() raises TimeoutError (ESP32 lost power / hung > 300 ms),
+       EdgeDigitalTwinNode immediately invokes grbl.emergency_stop() sending '!' (Feed Hold)
+       over Serial to GRBL and sets watchdog_tripped=True.
+    2. When telemetry ts_ms gap between packets exceeds 300 ms (e.g. 450 - 100 = 350 ms),
+       check_telemetry_watchdog() trips and dispatches '!' to GRBL as well.
+    """
+    class WatchdogMockGRBLSerial:
+        def __init__(self):
+            self.writes = []
+            self._pending_status = False
+
+        def write(self, data):
+            self.writes.append(data)
+            if data == b"?":
+                self._pending_status = True
+
+        def flush(self):
+            pass
+
+        def readline(self):
+            if self._pending_status:
+                self._pending_status = False
+                return b"<Hold:0|MPos:0.000,0.000,0.000|FS:0,10000|Ov:100,100,100>\r\n"
+            return b"ok\r\n"
+
+        def close(self):
+            pass
+
+    # Case 1: daq.read_telemetry() times out (> 300 ms due to dead ESP32)
+    daq_timeout = BreadboardDAQInterface(mode="hardware_emulator", machine_id="M0")
+
+    def dead_esp32_read(dt_ms=100):
+        raise TimeoutError("ESP32 telemetry UART timeout after 0.300s")
+
+    daq_timeout.read_telemetry = dead_esp32_read
+
+    mock_serial_1 = WatchdogMockGRBLSerial()
+    grbl_1 = GRBLHardwareController(mode="grbl_emulator", esp32_interface=daq_timeout)
+    grbl_1.mode = "real_serial"
+    grbl_1.serial_conn = mock_serial_1
+
+    node_1 = EdgeDigitalTwinNode(
+        machine_id="M0",
+        daq_interface=daq_timeout,
+        grbl_controller=grbl_1,
+        cdi_threshold=0.12,
+    )
+    assert node_1.telemetry_watchdog_timeout_ms == pytest.approx(300.0)
+    assert node_1.last_valid_telemetry_ts_ms is None
+
+    op = {
+        "op_id": "J1_O1",
+        "t_proc_min": 2.0,
+        "speed_level": 1,
+        "energy_kwh": 0.15,
+        "feed": 500.0,
+        "spindle": 10000.0,
+        "x": 10.0,
+        "y": 15.0,
+        "z": -1.0,
+    }
+    res_1 = node_1.dispatch_operation(op)
+    assert res_1["watchdog_tripped"] is True
+    assert node_1.watchdog_tripped is True
+    assert res_1["trigger_cloud_reschedule"] is True
+    assert node_1.last_trigger_payload is not None
+    assert node_1.last_trigger_payload.reason == "TELEMETRY_WATCHDOG_TIMEOUT"
+    assert b"!" in mock_serial_1.writes
+    assert grbl_1.grbl_state == "Hold"
+
+    # Case 2: Packet gap > 300 ms triggers check_telemetry_watchdog()
+    daq_gap = BreadboardDAQInterface(mode="hardware_emulator", machine_id="M0")
+    packets = iter([
+        {
+            "ts_ms": 100,
+            "v_bus": 24.0,
+            "i_amp": 1.9,
+            "p_raw_w": 45.6,
+            "p_filt_w": 45.5,
+            "vib_rms_g": 0.88,
+            "ssr_state": "CUTTING",
+            "sensor_ok": True,
+            "fault_latched": False,
+            "i2c_err_cnt": 0,
+        },
+        {
+            "ts_ms": 450,
+            "v_bus": 24.0,
+            "i_amp": 1.9,
+            "p_raw_w": 45.6,
+            "p_filt_w": 45.5,
+            "vib_rms_g": 0.88,
+            "ssr_state": "CUTTING",
+            "sensor_ok": True,
+            "fault_latched": False,
+            "i2c_err_cnt": 0,
+        },
+    ])
+    daq_gap.read_telemetry = lambda dt_ms=100: next(packets)
+
+    mock_serial_2 = WatchdogMockGRBLSerial()
+    grbl_2 = GRBLHardwareController(mode="grbl_emulator", esp32_interface=daq_gap)
+    grbl_2.mode = "real_serial"
+    grbl_2.serial_conn = mock_serial_2
+
+    node_2 = EdgeDigitalTwinNode(
+        machine_id="M0",
+        daq_interface=daq_gap,
+        grbl_controller=grbl_2,
+        cdi_threshold=0.12,
+    )
+    res_ok = node_2.dispatch_operation(op)
+    assert res_ok["watchdog_tripped"] is False
+    assert node_2.last_valid_telemetry_ts_ms == pytest.approx(100.0)
+    assert b"!" not in mock_serial_2.writes
+
+    res_gap = node_2.dispatch_operation(op)
+    assert res_gap["watchdog_tripped"] is True
+    assert node_2.watchdog_tripped is True
+    assert b"!" in mock_serial_2.writes
+    assert grbl_2.grbl_state == "Hold"
+
+
+
 

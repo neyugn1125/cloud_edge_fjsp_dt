@@ -13,7 +13,11 @@
  * - Actuators:
  *     - SSR Standby Power: GPIO 25
  *     - SSR Main CNC Power: GPIO 26
- *     - GRBL Hardware Feed Hold: GPIO 27 (wired to GRBL Shield/DLC32 A1; HIGH=run, LOW=brake)
+ *     - GRBL Hardware Feed Hold: GPIO 27 (OUTPUT_OPEN_DRAIN; High-Z/HIGH=run, LOW=brake, no internal 3.3V pull-up)
+ *       * Arduino Uno + CNC Shield V3 (5V logic): wire GPIO 27 through an optocoupler (PC817)
+ *         or N-channel MOSFET (2N7000) open-drain stage to Feed Hold (A1) to isolate 3.3V vs 5V pull-up.
+ *       * Makerbase MKS DLC32 (ESP32 3.3V logic running Grbl_ESP32 / FluidNC): wire to the Hold pin
+ *         on the input header (I36 / GPIO 36).
  *     - MANDATORY HARDWARE SAFETY: Connect external 10 kOhm pull-down resistors
  *       from GPIO 25 and GPIO 26 to GND to prevent spurious SSR activation while
  *       ESP32 pins are floating (High-Z) during initial power-on / reset.
@@ -40,8 +44,12 @@
 #define PIN_I2C_SCL           22
 #define PIN_SSR_STANDBY       25
 #define PIN_SSR_MAIN          26
-#define PIN_GRBL_FEED_HOLD    27   // GRBL Feed Hold A1 (HIGH = normal, LOW = emergency brake)
-#define SPINDLE_DECEL_WAIT_MS 2000 // Safe 2.0s deceleration window before cutting Spindle SSR
+#define PIN_GRBL_FEED_HOLD     27      // GRBL Feed Hold (Open-Drain: High-Z = normal, LOW = emergency brake)
+#define GRBL_MAX_RATE_MM_MIN   1000.0f // GRBL $110 max rate (mm/min)
+#define GRBL_ACCEL_MM_S2       10.0f   // GRBL $120 acceleration (mm/s^2)
+#define DECEL_SAFETY_MARGIN_MS 833     // Safety margin (ms)
+// Kinematic worst-case deceleration time: (1000 / 60) / 10 = 1.667 s + 0.833 s margin = 2500 ms
+#define SPINDLE_DECEL_WAIT_MS  ((uint32_t)((((GRBL_MAX_RATE_MM_MIN / 60.0f) / GRBL_ACCEL_MM_S2) * 1000.0f) + 0.5f) + DECEL_SAFETY_MARGIN_MS)
 
 #define INA226_I2C_ADDR     0x40
 #define ADXL345_I2C_ADDR    0x53
@@ -552,11 +560,11 @@ void setup() {
     digitalWrite(PIN_SSR_STANDBY, LOW);
     applySSRState(STATE_OFF); // Fail-safe default initial state: OFF
 
-    // Initialize hardware GRBL Feed Hold pin (HIGH = normal, LOW = active brake)
-    gpio_pullup_en((gpio_num_t)PIN_GRBL_FEED_HOLD);
+    // Initialize hardware GRBL Feed Hold pin in Open-Drain mode (High-Z = normal, LOW = active brake)
+    // Disable internal 3.3V pull-up to avoid conflict with 5V pull-up on Arduino CNC Shield A1
     digitalWrite(PIN_GRBL_FEED_HOLD, HIGH);
-    pinMode(PIN_GRBL_FEED_HOLD, OUTPUT);
-    gpio_set_direction((gpio_num_t)PIN_GRBL_FEED_HOLD, GPIO_MODE_INPUT_OUTPUT);
+    pinMode(PIN_GRBL_FEED_HOLD, OUTPUT_OPEN_DRAIN);
+    gpio_pullup_dis((gpio_num_t)PIN_GRBL_FEED_HOLD);
     digitalWrite(PIN_GRBL_FEED_HOLD, HIGH);
 
     // Initialize I2C Bus at 400kHz

@@ -4,12 +4,14 @@ Test Suite and Closed-Loop Hardware-in-the-Loop (HIL) Simulation for Task 4.3.
 Integrates the entire Cloud-Edge Digital Twin framework for benchmark Mk01_green.json:
 - Continuous physical micro-disturbances (wear rate fluctuating +15%..+30%).
 - Discrete macro-disturbances (Op 20 and Op 38: +60% wear spike + 8 min machine stoppage).
-- Compares 4 orthogonal operational modes across all 55 operations (2x2 Factorial / Stepwise Design):
-  * Mode 1: Periodic Resync + No EKF (Every 5 ops, theoretical nominal wear tracking)
-  * Mode 2: Periodic Resync + Live EKF (Every 5 ops, live EKF + statistical overrun PM)
-  * Mode 3: One-Shot Autonomous + Live EKF (0 Cloud resyncs, live EKF at edge)
-  * Mode 4: Proposed Event-Triggered CDI + Live EKF (theta_th = 0.12, live EKF at edge)
-- Computes paired Wilcoxon signed-rank p-values (Mode 4 vs Modes 1..3) for Makespan & TOU Cost.
+- Compares 5 operational modes across all 55 operations:
+  * Mode 1: Periodic High-Freq + No EKF (Every 5 ops = 10 calls, theoretical nominal wear tracking)
+  * Mode 2: Periodic High-Freq + Live EKF (Every 5 ops = 10 calls, live EKF + statistical overrun PM)
+  * Mode 3: Periodic Frequency-Matched + Live EKF (Op 25 & Op 50 = 2 calls, frequency-matched blind to shock timing)
+  * Mode 4: One-Shot Autonomous + Live EKF (0 Cloud resyncs, live EKF at edge)
+  * Mode 5: Proposed Event-Triggered CDI + Live EKF (theta_th = 0.12, live EKF at edge)
+- Uses measured Cloud Warm-Start NSGA-III Resynchronization latency (2.6835 s + 2 * 0.0814 ms MQTT RTT).
+- Computes paired Wilcoxon signed-rank p-values (Mode 5 vs Modes 1..4) for Makespan & TOU Cost.
 - Saves unrounded decimal means (+/- std) to data/benchmarks/phase4_hil_metrics.csv.
 - Generates publication-ready 3-subplot figure tests/phase4_closed_loop_hil.png.
 """
@@ -102,13 +104,17 @@ def fast_heuristic_resync(
     nominal_wear_um: Optional[Dict[str, float]] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Fast Heuristic Resync (`0.2143 ms` empirical runtime in `data/benchmarks/measured_latencies.json`)
-    for re-assigning uncompleted operations during multi-seed online HIL closed-loop evaluation.
+    Cloud Warm-Start Resynchronization surrogate for multi-seed online HIL closed-loop evaluation
+    (using fast list-scheduling assignment paired with measured Cloud Warm-Start NSGA-III Resync
+    runtime `2.6835 s` from `data/benchmarks/measured_latencies.json` for overhead accounting).
 
     Uses identical machine selection and TOU-aware speed-scaling rules across all resyncing modes:
-    - When `estimators` is provided (Modes 2 & 4), uses live Dual-Sensor EKF wear estimates.
-    - When `estimators` is None (Mode 1), uses theoretical `nominal_wear_um` tracking without sensor feedback.
-    (Note: offline full Cloud Warm-Start NSGA-III resync takes `2.6835 s`, also recorded in `measured_latencies.json`.)
+    - Preserves original multi-objective speed `orig_plan["speed_level"]` off-peak and mid-peak,
+      derating to `speed = 1` strictly inside the expensive On-Peak window (`rate >= 0.20`).
+    - Evaluates candidate schedule fitness via combined completion time (`end_t`), integrated TOU
+      electricity cost (`env._integrate_tou_cost(...)`), and expected tool wear increment.
+    - When `estimators` is provided (Modes 2, 3, 5), uses live Dual-Sensor EKF wear estimates.
+    - When `estimators` is None (Mode 1), uses theoretical `nominal_wear_um` tracking without sensors.
     """
     job_next_op = {j: env.current_op_idx[j] for j in range(env.num_jobs)}
     sim_mach_avail = {m_id: env.machines[m_id].available_time for m_id in env.machine_ids}
@@ -130,8 +136,9 @@ def fast_heuristic_resync(
 
     # Neutral heuristic optimization weights shared fairly across modes
     bonus_val = -2.5
-    p_weight = 0.40
     avail_w = 0.05
+    cost_weight = 15.0
+    wear_weight = 0.15
 
     while len(scheduled_new) < total_remaining:
         cand_ops = []
@@ -153,6 +160,7 @@ def fast_heuristic_resync(
             j_ready = sim_job_ready[j]
             orig_plan = next((p for p in uncompleted if int(p["job_index"]) == j and int(p["op_index"]) == o), None)
             preferred_m = orig_plan["machine_id"] if orig_plan else None
+            orig_speed = int(orig_plan.get("speed_level", 1)) if orig_plan else 1
 
             for alt in op_info["eligible_machines"]:
                 m_id = alt["machine_id"]
@@ -161,22 +169,35 @@ def fast_heuristic_resync(
                 m_avail = sim_mach_avail[m_id]
                 w_est = sim_mach_wear[m_id]
 
+                t_idle_start = max(m_avail, j_ready)
+                rate_pre = env.system_config.get_tou_rate(t_idle_start)
+                speed_pre = 1 if rate_pre >= 0.20 else orig_speed
+                v_s_pre = env.system_config.speed_scaling.levels[speed_pre].speed_factor
+                dw_pre = twin.base_eta * (v_s_pre ** (twin.beta - 1)) * t_base
+
                 had_pm = False
                 pm_dur = 0.0
-                if w_est >= 65.0:
+                if w_est >= 65.0 or (w_est + dw_pre >= 80.0 and w_est >= 50.5):
                     had_pm = True
                     pm_dur = twin.t_replace_min
 
-                start_t = max(m_avail, j_ready) + pm_dur
+                start_t = t_idle_start + pm_dur
                 rate = env.system_config.get_tou_rate(start_t)
-                speed = 1 if rate >= 0.15 else 2
+                speed = 1 if rate >= 0.20 else orig_speed
                 v_s = env.system_config.speed_scaling.levels[speed].speed_factor
                 proc_t = t_base / v_s
                 end_t = start_t + proc_t
 
+                p_cut_kw = (twin.p_idle_kw + twin.p_cut_base_kw * (v_s ** twin.alpha_p)) * (
+                    1.0 + twin.gamma * ((0.0 if had_pm else w_est) / twin.w_max_um)
+                )
+                tou_cost = env._integrate_tou_cost(p_cut_kw, start_t, end_t)
+                if had_pm:
+                    tou_cost += env._integrate_tou_cost(twin.p_stdby_kw, t_idle_start, start_t)
+                delta_w_est = twin.base_eta * (v_s ** (twin.beta - 1)) * t_base
+
                 bonus = bonus_val if m_id == preferred_m else 0.0
-                p_penalty = p_weight * (twin.p_cut_base_kw / 4.5) if rate >= 0.15 else 0.10 * (twin.p_cut_base_kw / 4.5)
-                score = end_t + bonus + avail_w * m_avail + p_penalty
+                score = end_t + bonus + avail_w * m_avail + cost_weight * tou_cost + wear_weight * delta_w_est
 
                 if score < best_score:
                     best_score = score
@@ -230,7 +251,7 @@ fast_cloud_reschedule_active = fast_heuristic_resync
 
 def run_closed_loop_hil_simulation(
     seed: int = 42,
-    mode: int = 4,
+    mode: int = 5,
     cdi_threshold: float = DEFAULT_CDI_THRESHOLD,
     benchmark_baseline_path: str = "data/benchmarks/cloud_baseline_schedule.json",
 ) -> Dict[str, Any]:
@@ -244,10 +265,11 @@ def run_closed_loop_hil_simulation(
     Args:
         seed: Random seed for disturbance stochasticity.
         mode: Operational mode:
-              1 = Periodic Resync + No EKF (Every 5 ops, nominal wear tracking)
-              2 = Periodic Resync + Live EKF (Every 5 ops, live EKF + statistical PM)
-              3 = One-Shot Autonomous + Live EKF (0 Cloud resyncs)
-              4 = Proposed Event-Triggered CDI + Live EKF
+              1 = Periodic High-Freq + No EKF (Every 5 ops = 10 calls, nominal wear tracking)
+              2 = Periodic High-Freq + Live EKF (Every 5 ops = 10 calls, live EKF + statistical PM)
+              3 = Periodic Frequency-Matched + Live EKF (Op 25 & Op 50 = 2 calls, fixed-interval control)
+              4 = One-Shot Autonomous + Live EKF (0 Cloud resyncs)
+              5 = Proposed Event-Triggered CDI + Live EKF (theta_th = 0.12)
         cdi_threshold: Cumulative Disturbance Index threshold theta_th.
         benchmark_baseline_path: Path to baseline JSON schedule.
 
@@ -289,7 +311,7 @@ def run_closed_loop_hil_simulation(
     anchor_step = 0
     c_act_anchor = 0.0
     e_act_anchor = 0.0
-    eff_threshold = float("inf") if mode == 3 else cdi_threshold
+    eff_threshold = float("inf") if mode == 4 else cdi_threshold
 
     # Stochastic Macro-disturbances around Op 19..22 and Op 37..40
     # Seed 201 fixes Op 20 and Op 38 for Phase 4 HIL representative anchor report
@@ -333,9 +355,10 @@ def run_closed_loop_hil_simulation(
         )
         t_base = float(alt["t_base_min"])
 
-        # Shared TOU-aware speed selection rule across all 4 modes
-        is_peak = (rate >= 0.15)
-        s = 1 if is_peak else int(op.get("speed_level", 2))
+        # Shared TOU-aware speed selection rule across all 5 modes:
+        # Preserve multi-objective planned speed off/mid-peak; only derate to s=1 in On-Peak (>= 0.20)
+        is_peak = (rate >= 0.20)
+        s = 1 if is_peak else int(op.get("speed_level", 1))
         v_s = env.system_config.speed_scaling.levels[s].speed_factor
         delta_w_nom = twin.base_eta * (v_s ** (twin.beta - 1)) * t_base
 
@@ -343,7 +366,7 @@ def run_closed_loop_hil_simulation(
             # Mode 1: Periodic Resync + No EKF (uses cumulative theoretical nominal wear tracking only)
             pm = 1 if (op.get("had_pm", False) or nominal_wear_um[m_id] + delta_w_nom >= 80.0) else 0
         else:
-            # Modes 2, 3, 4: Live EKF wear feedback + statistical uncertainty boundary (no oracle constants)
+            # Modes 2, 3, 4, 5: Live EKF wear feedback + statistical uncertainty boundary (no oracle constants)
             w_hat = est.estimated_wear_um
             sigma = est.sigma_ekf
             delta_margin = 2.0
@@ -388,6 +411,9 @@ def run_closed_loop_hil_simulation(
         if mode in (1, 2):
             if step_i % 5 == 0 and step_i < num_ops:
                 trigger = True
+        elif mode == 3:
+            if step_i in (25, 50) and step_i < num_ops:
+                trigger = True
         else:
             if cdi > eff_threshold and step_i < num_ops:
                 trigger = True
@@ -410,8 +436,8 @@ def run_closed_loop_hil_simulation(
                 env, current_cloud_ops, anchor_step=anchor_step, c_anchor=c_act_anchor, e_anchor=e_act_anchor
             )
 
-            # Empirical Fast Heuristic Resync latency (0.2143 ms) + round-trip MQTT RTT
-            emp_resync_s = float(MEASURED_LATENCIES.get("cloud_fast_reschedule_active_ms", {}).get("mean", 0.214254)) / 1000.0
+            # Measured Cloud Warm-Start NSGA-III Resync latency (2.6835 s) + round-trip MQTT RTT
+            emp_resync_s = float(MEASURED_LATENCIES.get("cloud_nsga3_resync_solve_s", {}).get("mean", 2.6835))
             emp_mqtt_s = float(MEASURED_LATENCIES.get("mqtt_loopback_rtt_ms", {}).get("mean", 0.081377)) / 1000.0
             call_overhead_s = emp_resync_s + 2.0 * emp_mqtt_s
             resync_durations_s.append(call_overhead_s)
@@ -482,13 +508,14 @@ def run_phase4_hil_simulation(
     seeds: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
     """
-    Execute full 4-mode orthogonal closed-loop HIL simulation across 15 independent test seeds.
+    Execute full 5-mode closed-loop HIL simulation across 15 independent test seeds.
 
     Modes:
-      - Mode 1: Periodic Resync + No EKF (every 5 ops, nominal wear tracking)
-      - Mode 2: Periodic Resync + Live EKF (every 5 ops, isolates EKF benefit vs Mode 1)
-      - Mode 3: One-Shot Autonomous + Live EKF (0 resyncs, isolates resync benefit vs Mode 4)
-      - Mode 4: Proposed Event-Triggered CDI + Live EKF (theta_th = 0.12)
+      - Mode 1: Periodic High-Freq + No EKF (every 5 ops = 10 calls, nominal wear tracking)
+      - Mode 2: Periodic High-Freq + Live EKF (every 5 ops = 10 calls, isolates EKF benefit vs Mode 1)
+      - Mode 3: Periodic Frequency-Matched + Live EKF (Op 25 & Op 50 = 2 calls, isolates shock timing vs Mode 5)
+      - Mode 4: One-Shot Autonomous + Live EKF (0 resyncs, isolates resync benefit vs Mode 5)
+      - Mode 5: Proposed Event-Triggered CDI + Live EKF (theta_th = 0.12)
     """
     if seeds is None:
         seeds = TEST_SEEDS
@@ -503,7 +530,7 @@ def run_phase4_hil_simulation(
             )
             for s in seeds
         ]
-        for m in (1, 2, 3, 4)
+        for m in (1, 2, 3, 4, 5)
     }
 
     # Representative seed 201 for trajectory visualization (Op 20 and Op 38 re-sync points)
@@ -515,11 +542,11 @@ def run_phase4_hil_simulation(
             cdi_threshold=DEFAULT_CDI_THRESHOLD,
             benchmark_baseline_path=benchmark_baseline_path,
         )
-        for m in (1, 2, 3, 4)
+        for m in (1, 2, 3, 4, 5)
     }
 
-    m4_cmax = [r["makespan_min"] for r in mode_runs[4]]
-    m4_cost = [r["tou_cost_usd"] for r in mode_runs[4]]
+    m5_cmax = [r["makespan_min"] for r in mode_runs[5]]
+    m5_cost = [r["tou_cost_usd"] for r in mode_runs[5]]
 
     result: Dict[str, Any] = {
         "num_ops": 55,
@@ -527,7 +554,8 @@ def run_phase4_hil_simulation(
         "cdi_mode2": rep_runs[2]["cdi_trace"],
         "cdi_mode3": rep_runs[3]["cdi_trace"],
         "cdi_mode4": rep_runs[4]["cdi_trace"],
-        "m4_resync_points": rep_runs[4]["resync_points"],
+        "cdi_mode5": rep_runs[5]["cdi_trace"],
+        "m5_resync_points": rep_runs[5]["resync_points"],
         "mean_edge_lat_ms": EDGE_ONNX_LATENCY_MEAN_MS,
         "edge_step_lat_ms": float(MEASURED_LATENCIES.get("edge_step_inference_ms", {}).get("mean", 0.150609)),
         "edge_shift_time_ms": float(MEASURED_LATENCIES.get("edge_full_episode_mk01_ms", {}).get("mean", 7.954974)),
@@ -548,17 +576,17 @@ def run_phase4_hil_simulation(
         ("num_pm", "num_pm_replacements"),
         ("num_bds", "num_breakdowns"),
     ]
-    for m in (1, 2, 3, 4):
+    for m in (1, 2, 3, 4, 5):
         runs = mode_runs[m]
         for out_key, src_key in metric_map:
             vals = [float(r[src_key]) for r in runs]
             result[f"{out_key}_m{m}"] = float(np.mean(vals))
             result[f"{out_key}_std_m{m}"] = float(np.std(vals))
-        result[f"p_wilcoxon_makespan_m{m}"] = 1.0 if m == 4 else _safe_paired_wilcoxon(
-            m4_cmax, [r["makespan_min"] for r in runs]
+        result[f"p_wilcoxon_makespan_m{m}"] = 1.0 if m == 5 else _safe_paired_wilcoxon(
+            m5_cmax, [r["makespan_min"] for r in runs]
         )
-        result[f"p_wilcoxon_cost_m{m}"] = 1.0 if m == 4 else _safe_paired_wilcoxon(
-            m4_cost, [r["tou_cost_usd"] for r in runs]
+        result[f"p_wilcoxon_cost_m{m}"] = 1.0 if m == 5 else _safe_paired_wilcoxon(
+            m5_cost, [r["tou_cost_usd"] for r in runs]
         )
 
     return result
@@ -572,14 +600,15 @@ def export_phase4_metrics_csv(
     sim_data: Dict[str, Any],
     output_path: str = "data/benchmarks/phase4_hil_metrics.csv",
 ) -> None:
-    """Export unrounded decimal means (+/- std) and paired Wilcoxon p-values across all 4 modes."""
+    """Export unrounded decimal means (+/- std) and paired Wilcoxon p-values across all 5 modes."""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     mode_specs = [
-        (1, "Mode 1", "Periodic Resync + No EKF (Every 5 ops)", 0.0),
-        (2, "Mode 2", "Periodic Resync + Live EKF (Every 5 ops)", round(float(sim_data["mean_edge_lat_ms"]), 4)),
-        (3, "Mode 3", "One-Shot Autonomous + Live EKF (No Re-sync)", round(float(sim_data["mean_edge_lat_ms"]), 4)),
-        (4, "Mode 4", "Proposed Event-Triggered CDI + Live EKF (CDI=0.12)", round(float(sim_data["mean_edge_lat_ms"]), 4)),
+        (1, "Mode 1", "Periodic High-Freq + No EKF (Every 5 ops)", 0.0),
+        (2, "Mode 2", "Periodic High-Freq + Live EKF (Every 5 ops)", round(float(sim_data["mean_edge_lat_ms"]), 4)),
+        (3, "Mode 3", "Periodic Frequency-Matched + Live EKF (Op 25, 50)", round(float(sim_data["mean_edge_lat_ms"]), 4)),
+        (4, "Mode 4", "One-Shot Autonomous + Live EKF (No Re-sync)", round(float(sim_data["mean_edge_lat_ms"]), 4)),
+        (5, "Mode 5", "Proposed Event-Triggered CDI + Live EKF (CDI=0.12)", round(float(sim_data["mean_edge_lat_ms"]), 4)),
     ]
 
     ref_calls_m2 = float(sim_data["cloud_calls_m2"])
@@ -640,25 +669,26 @@ def plot_phase4_closed_loop_hil(
     output_path: str = "tests/phase4_closed_loop_hil.png",
 ) -> None:
     """
-    Generate Q1 journal-quality 3-subplot comparison figure across the 4 orthogonal modes.
+    Generate Q1 journal-quality 3-subplot comparison figure across the 5 HIL modes.
 
-    Subplot 1: CDI(t) trajectory across 55 operations (Mode 4 vs Mode 3 with threshold line and trigger markers).
-    Subplot 2: Multi-tier decision latency on logarithmic scale (Edge ONNX vs Fast Heuristic Resync vs Cloud NSGA-III).
-    Subplot 3: Communication overhead and schedule performance across Modes 1-4 (Resync calls, Makespan, TOU cost).
+    Subplot 1: CDI(t) trajectory across 55 operations (Mode 5 CDI vs Mode 3 Freq-Matched vs Mode 4 One-Shot).
+    Subplot 2: Multi-tier decision latency on logarithmic scale (highlighting Cloud Warm-Start Resync 2.6835 s).
+    Subplot 3: Communication overhead and schedule performance across Modes 1-5 (Resync calls, Makespan, TOU cost).
     """
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     ops_x = np.arange(1, sim_data["num_ops"] + 1)
-    fig, axs = plt.subplots(1, 3, figsize=(21.0, 5.8), dpi=300)
+    fig, axs = plt.subplots(1, 3, figsize=(22.0, 6.0), dpi=300)
 
     c_blue = "#1f77b4"
     c_gray = "#7f7f7f"
     c_red = "#d62728"
     c_green = "#2ca02c"
     c_orange = "#ff7f0e"
+    c_purple = "#8e44ad"
 
     # --------------------------------------------------------------------------
-    # Subplot 1: CDI(t) Trajectory across 55 Operations (Mode 4 vs Mode 3)
+    # Subplot 1: CDI(t) Trajectory across 55 Operations (Modes 3, 4, 5)
     # --------------------------------------------------------------------------
     ax1 = axs[0]
     ax1.axhspan(0.0, 0.12, color=c_green, alpha=0.10, label="Autonomous Edge Zone (CDI <= 0.12)")
@@ -671,33 +701,42 @@ def plot_phase4_closed_loop_hil(
     )
     ax1.plot(
         ops_x,
-        sim_data["cdi_mode3"],
+        sim_data["cdi_mode4"],
         color=c_gray,
         linestyle="--",
         linewidth=2.0,
         alpha=0.85,
-        label="Mode 3: One-Shot Autonomous + EKF",
+        label="Mode 4: One-Shot Autonomous + EKF",
     )
     ax1.plot(
         ops_x,
-        sim_data["cdi_mode4"],
+        sim_data["cdi_mode3"],
+        color=c_purple,
+        linestyle="-.",
+        linewidth=1.9,
+        alpha=0.85,
+        label="Mode 3: Periodic Freq-Matched (Op 25, 50)",
+    )
+    ax1.plot(
+        ops_x,
+        sim_data["cdi_mode5"],
         color=c_blue,
         linestyle="-",
         linewidth=2.4,
         marker="o",
         markersize=3.5,
-        label="Mode 4: Event-Triggered CDI + EKF (Proposed)",
+        label="Mode 5: Proposed Event-Triggered CDI + EKF",
     )
 
-    for r_idx in sim_data["m4_resync_points"]:
-        val = sim_data["cdi_mode4"][r_idx - 1]
+    for r_idx in sim_data["m5_resync_points"]:
+        val = sim_data["cdi_mode5"][r_idx - 1]
         ax1.scatter([r_idx], [val], color=c_red, s=80, zorder=5)
         ax1.annotate(
-            f"Op {r_idx}\nThreshold Breach\n-> Fast Resync",
+            f"Op {r_idx}\nThreshold Breach\n-> Cloud Warm-Start Resync",
             xy=(r_idx, val),
-            xytext=(r_idx - 8 if r_idx > 30 else r_idx + 3, val + 0.045),
+            xytext=(r_idx - 11 if r_idx > 30 else r_idx + 2, val + 0.045),
             arrowprops=dict(facecolor=c_red, shrink=0.08, width=1.2, headwidth=6),
-            fontsize=8.3,
+            fontsize=8.0,
             fontweight="bold",
             color=c_red,
             bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor=c_red, alpha=0.9),
@@ -707,10 +746,13 @@ def plot_phase4_closed_loop_hil(
     ax1.set_xlabel("Operation Progress Index (1 to 55)", fontsize=10.5)
     ax1.set_ylabel("Disturbance Index CDI(t)", fontsize=10.5)
     ax1.set_xlim(1, 55)
-    y_top = max(0.32, float(max(max(sim_data["cdi_mode3"]), max(sim_data["cdi_mode4"]))) + 0.06)
+    y_top = max(
+        0.34,
+        float(max(max(sim_data["cdi_mode3"]), max(sim_data["cdi_mode4"]), max(sim_data["cdi_mode5"]))) + 0.06,
+    )
     ax1.set_ylim(-0.01, y_top)
     ax1.grid(True, linestyle="--", alpha=0.35)
-    ax1.legend(loc="upper left", fontsize=8.0, framealpha=0.9)
+    ax1.legend(loc="upper left", fontsize=7.6, framealpha=0.9)
 
     # --------------------------------------------------------------------------
     # Subplot 2: Multi-Tier Latency & Rescheduling Benchmark Spectrum
@@ -721,7 +763,7 @@ def plot_phase4_closed_loop_hil(
         "Edge ONNX\n(Forward)",
         "MQTT LAN\n(RTT)",
         "Edge Step\n(Decision)",
-        "Fast Heuristic\nResync",
+        "Fast List\nSurrogate",
         "Edge Shift\n(55 Steps)",
         "Cloud NSGA-III\n(Warm Resync)",
         "Cloud NSGA-III\n(Full 100G)",
@@ -732,7 +774,7 @@ def plot_phase4_closed_loop_hil(
     edge_step_ms = float(sim_data.get("edge_step_lat_ms", 0.1506))
     fast_resync_ms = float(sim_data.get("fast_resync_lat_ms", 0.2143))
     edge_shift_ms = float(sim_data.get("edge_shift_time_ms", 7.955))
-    cloud_resync_ms = float(sim_data.get("cloud_resync_lat_s", 2.684)) * 1000.0
+    cloud_resync_ms = float(sim_data.get("cloud_resync_lat_s", 2.6835)) * 1000.0
     cloud_full_ms = float(sim_data.get("cloud_solve_lat_s", CLOUD_SOLVER_LATENCY_S)) * 1000.0
 
     latencies = [edge_fwd_ms, mqtt_ms, edge_step_ms, fast_resync_ms, edge_shift_ms, cloud_resync_ms, cloud_full_ms]
@@ -740,7 +782,7 @@ def plot_phase4_closed_loop_hil(
 
     bars = ax2.bar(labels, latencies, color=bar_colors, width=0.58, edgecolor="black", linewidth=1.0)
     ax2.set_yscale("log")
-    ax2.set_title("(b) Multi-Tier Latency & Rescheduling Spectrum", fontsize=11.0, fontweight="bold")
+    ax2.set_title("(b) Multi-Tier Latency & Cloud Warm-Start Spectrum", fontsize=11.0, fontweight="bold")
     ax2.set_ylabel("Latency / Computation Time (ms, Log10 Scale)", fontsize=10.0)
     ax2.set_ylim(1e-3, 1e6)
     ax2.tick_params(axis="x", labelsize=7.5)
@@ -750,9 +792,9 @@ def plot_phase4_closed_loop_hil(
         f"{edge_fwd_ms:.4f} ms\n(ONNX Fwd)",
         f"{mqtt_ms:.4f} ms\n(MQTT RTT)",
         f"{edge_step_ms:.4f} ms\n(Edge Step)",
-        f"{fast_resync_ms:.3f} ms\n(HIL Resync)",
+        f"{fast_resync_ms:.3f} ms\n(Surrogate)",
         f"{edge_shift_ms:.2f} ms\n(Full Shift)",
-        f"{cloud_resync_ms/1000.0:.2f} s\n(NSGA Resync)",
+        f"{cloud_resync_ms/1000.0:.4f} s\n(HIL Resync)",
         f"{cloud_full_ms/1000.0:.2f} s\n(Full Solve)",
     ]
     for bar, lab in zip(bars, callouts):
@@ -763,19 +805,18 @@ def plot_phase4_closed_loop_hil(
             lab,
             ha="center",
             va="bottom",
-            fontsize=6.9,
+            fontsize=6.8,
             fontweight="bold",
         )
 
     ax2.text(
         0.03,
         0.96,
-        f"Empirical Benchmark (Linux x86_64, ONNX CPU):\n"
-        f"• Per-Decision Step: Edge ({edge_step_ms:.4f} ms) vs Cloud NSGA-III ({cloud_full_ms/1000.0:.2f} s)\n"
-        f"  -> ~{cloud_full_ms / edge_step_ms:,.0f}x Speedup (~2.81x10^4x)\n"
-        f"• Online HIL Resync: Fast Heuristic Resync ({fast_resync_ms:.3f} ms)\n"
-        f"  vs Offline Warm-Start NSGA-III Resync ({cloud_resync_ms/1000.0:.2f} s)\n"
-        f"• Full Shift: Edge ({edge_shift_ms:.2f} ms) vs Cloud ({cloud_full_ms/1000.0:.2f} s) (~{cloud_full_ms / edge_shift_ms:,.0f}x)",
+        f"Cloud Warm-Start Resynchronization Budget:\n"
+        f"• Per-Call Cloud Warm-Start NSGA-III Resync: {cloud_resync_ms/1000.0:.4f} s\n"
+        f"  (10 periodic calls = {10.0 * cloud_resync_ms/1000.0:.2f} s solver queue delay)\n"
+        f"• Edge Decision Step: {edge_step_ms:.4f} ms (~{cloud_full_ms / edge_step_ms:,.0f}x faster than Full Solve)\n"
+        f"• Fast List Surrogate Re-assignment: {fast_resync_ms:.3f} ms (simulation engine)",
         transform=ax2.transAxes,
         ha="left",
         va="top",
@@ -786,32 +827,33 @@ def plot_phase4_closed_loop_hil(
     )
 
     # --------------------------------------------------------------------------
-    # Subplot 3: Communication Overhead & Schedule Quality (4 Orthogonal Modes)
+    # Subplot 3: Communication Overhead & Schedule Quality (5 HIL Modes)
     # --------------------------------------------------------------------------
     ax3 = axs[2]
 
     modes = [
         "Mode 1\nPeriodic\n(No EKF)",
         "Mode 2\nPeriodic\n(+EKF)",
-        "Mode 3\nOne-Shot\n(+EKF)",
-        "Mode 4\nProposed\n(CDI+EKF)",
+        "Mode 3\nFreq-Match\n(Op 25,50)",
+        "Mode 4\nOne-Shot\n(+EKF)",
+        "Mode 5\nProposed\n(CDI+EKF)",
     ]
     x = np.arange(len(modes))
     width = 0.25
 
-    calls = [sim_data[f"cloud_calls_m{m}"] for m in (1, 2, 3, 4)]
-    makespans = [sim_data[f"makespan_m{m}"] for m in (1, 2, 3, 4)]
-    costs = [sim_data[f"cost_m{m}"] for m in (1, 2, 3, 4)]
+    calls = [sim_data[f"cloud_calls_m{m}"] for m in (1, 2, 3, 4, 5)]
+    makespans = [sim_data[f"makespan_m{m}"] for m in (1, 2, 3, 4, 5)]
+    costs = [sim_data[f"cost_m{m}"] for m in (1, 2, 3, 4, 5)]
 
-    b1 = ax3.bar(x - width, calls, width, label="Resync Calls (Mean)", color="#9c27b0", edgecolor="black")
+    b1 = ax3.bar(x - width, calls, width, label="Warm-Start Calls (Mean)", color="#9c27b0", edgecolor="black")
     b2 = ax3.bar(x, costs, width, label=r"TOU Energy Cost ($)", color=c_orange, edgecolor="black")
 
     ax3_twin = ax3.twinx()
     b3 = ax3_twin.bar(x + width, makespans, width, label="Makespan (min)", color=c_blue, edgecolor="black")
 
-    ax3.set_title("(c) Orthogonal 4-Mode Trade-Off Comparison", fontsize=11.5, fontweight="bold")
+    ax3.set_title("(c) 5-Mode HIL Trade-Off (incl. Freq-Matched Control)", fontsize=11.0, fontweight="bold")
     ax3.set_xticks(x)
-    ax3.set_xticklabels(modes, fontsize=8.5)
+    ax3.set_xticklabels(modes, fontsize=8.0)
     ax3.set_ylabel("Cloud Calls / TOU Cost ($)", fontsize=10.5)
     ax3_twin.set_ylabel("Makespan (minutes)", fontsize=10.5, color=c_blue)
     ax3.set_ylim(0, 14)
@@ -819,11 +861,11 @@ def plot_phase4_closed_loop_hil(
     ax3.grid(True, linestyle="--", alpha=0.35)
 
     for b in b1:
-        ax3.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.25, f"{b.get_height():.2f}", ha="center", fontsize=7.5, fontweight="bold")
+        ax3.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.25, f"{b.get_height():.2f}", ha="center", fontsize=7.0, fontweight="bold")
     for b in b2:
-        ax3.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.25, f"${b.get_height():.2f}", ha="center", fontsize=7.5, fontweight="bold")
+        ax3.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.25, f"${b.get_height():.2f}", ha="center", fontsize=7.0, fontweight="bold")
     for b in b3:
-        ax3_twin.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.8, f"{b.get_height():.1f}m", ha="center", fontsize=7.5, fontweight="bold", color=c_blue)
+        ax3_twin.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.8, f"{b.get_height():.1f}m", ha="center", fontsize=7.0, fontweight="bold", color=c_blue)
 
     handles = [b1, b2, b3]
     labels_leg = [h.get_label() for h in handles]
@@ -843,25 +885,29 @@ def plot_phase4_closed_loop_hil(
 
 def test_phase4_hil_simulation_and_metrics():
     """
-    Execute full 4-mode orthogonal closed-loop HIL simulation and verify invariants:
+    Execute full 5-mode closed-loop HIL simulation and verify invariants:
     1. Finite, positive metrics (makespan > 0, energy > 0, cost > 0) and bounded CDI in [0, 1].
-    2. Modes 1 & 2 invoke periodic Cloud resync exactly 10.00 times, Mode 3 invokes 0.00 times,
-       and 0 < Mode 4 mean calls < Mode 2 calls (10.0).
-    3. Modes 2, 3, 4 (Live EKF) achieve 0.00 breakdowns vs Mode 1 (No EKF).
-    4. Exported CSVs include unrounded decimal means, +/- std columns, and paired Wilcoxon p-values.
-    5. High-resolution figure PNG exists at tests/phase4_closed_loop_hil.png and results/.
+    2. Modes 1 & 2 invoke periodic Cloud resync exactly 10.00 times, Mode 3 invokes 2.00 times,
+       Mode 4 invokes 0.00 times, and 0 < Mode 5 mean calls < Mode 2 calls (10.0).
+    3. Modes 2, 3, 4, 5 (Live EKF) achieve 0.00 breakdowns vs Mode 1 (No EKF).
+    4. Warm-Start NSGA-III Resync overhead (~2.6835 s/call) gives ~26.84 s for Mode 2 (10 calls).
+    5. Exported CSVs include 5 rows, unrounded decimal means, +/- std columns, and paired Wilcoxon p-values.
+    6. High-resolution figure PNG exists at tests/phase4_closed_loop_hil.png and results/.
     """
     sim_data = run_phase4_hil_simulation()
 
     assert sim_data["cloud_calls_m1"] == pytest.approx(10.0)
     assert sim_data["cloud_calls_m2"] == pytest.approx(10.0)
-    assert sim_data["cloud_calls_m3"] == pytest.approx(0.0)
-    assert 0.0 < sim_data["cloud_calls_m4"] < sim_data["cloud_calls_m2"]
+    assert sim_data["cloud_calls_m3"] == pytest.approx(2.0)
+    assert sim_data["cloud_calls_m4"] == pytest.approx(0.0)
+    assert 0.0 < sim_data["cloud_calls_m5"] < sim_data["cloud_calls_m2"]
     assert sim_data["num_bds_m2"] == pytest.approx(0.0)
     assert sim_data["num_bds_m3"] == pytest.approx(0.0)
     assert sim_data["num_bds_m4"] == pytest.approx(0.0)
+    assert sim_data["num_bds_m5"] == pytest.approx(0.0)
+    assert sim_data["comm_overhead_m2"] >= 26.0
 
-    for m_key in ["m1", "m2", "m3", "m4"]:
+    for m_key in ["m1", "m2", "m3", "m4", "m5"]:
         cmax = sim_data[f"makespan_{m_key}"]
         energy = sim_data[f"energy_{m_key}"]
         cost = sim_data[f"cost_{m_key}"]
@@ -873,7 +919,7 @@ def test_phase4_hil_simulation_and_metrics():
         assert math.isfinite(max_cdi) and 0.0 <= max_cdi <= 1.0
         assert math.isfinite(final_cdi) and 0.0 <= final_cdi <= 1.0
 
-    for trace_key in ["cdi_mode1", "cdi_mode2", "cdi_mode3", "cdi_mode4"]:
+    for trace_key in ["cdi_mode1", "cdi_mode2", "cdi_mode3", "cdi_mode4", "cdi_mode5"]:
         assert len(sim_data[trace_key]) == sim_data["num_ops"]
         assert all(math.isfinite(v) and 0.0 <= v <= 1.0 for v in sim_data[trace_key])
 
@@ -907,7 +953,7 @@ def test_phase4_hil_simulation_and_metrics():
     }
     with open(csv_path, "r", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
-    assert len(rows) == 4
+    assert len(rows) == 5
     assert expected_cols.issubset(set(rows[0].keys()))
     for r in rows:
         p_mk = float(r["p_wilcoxon_makespan"])
@@ -931,15 +977,16 @@ def test_phase4_multi_tier_latency_hierarchy():
 
 
 if __name__ == "__main__":
-    print("Executing Task 4.3 Full Orthogonal 4-Mode HIL Closed-Loop Simulation...")
+    print("Executing Task 4.3 Full 5-Mode HIL Closed-Loop Simulation...")
     sim_data = run_phase4_hil_simulation()
     export_phase4_metrics_csv(sim_data)
     plot_phase4_closed_loop_hil(sim_data)
     print(f"Metrics saved to: data/benchmarks/phase4_hil_metrics.csv")
     print(f"Chart saved to: tests/phase4_closed_loop_hil.png")
-    print(f"Mode 1 (Periodic, No EKF)   Calls: {sim_data['cloud_calls_m1']:.2f} | Cmax: {sim_data['makespan_m1']:.2f} | Cost: ${sim_data['cost_m1']:.3f} | BDs: {sim_data['num_bds_m1']:.2f}")
-    print(f"Mode 2 (Periodic, Live EKF) Calls: {sim_data['cloud_calls_m2']:.2f} | Cmax: {sim_data['makespan_m2']:.2f} | Cost: ${sim_data['cost_m2']:.3f} | BDs: {sim_data['num_bds_m2']:.2f}")
-    print(f"Mode 3 (One-Shot, Live EKF) Calls: {sim_data['cloud_calls_m3']:.2f} | Cmax: {sim_data['makespan_m3']:.2f} | Cost: ${sim_data['cost_m3']:.3f} | BDs: {sim_data['num_bds_m3']:.2f}")
-    reduct = (sim_data["cloud_calls_m2"] - sim_data["cloud_calls_m4"]) / sim_data["cloud_calls_m2"] * 100.0
-    print(f"Mode 4 (Proposed CDI+EKF)   Calls: {sim_data['cloud_calls_m4']:.2f} (-{reduct:.1f}%) | Cmax: {sim_data['makespan_m4']:.2f} | Cost: ${sim_data['cost_m4']:.3f} | BDs: {sim_data['num_bds_m4']:.2f}")
+    print(f"Mode 1 (Periodic 5, No EKF)     Calls: {sim_data['cloud_calls_m1']:.2f} | Cmax: {sim_data['makespan_m1']:.2f} | Cost: ${sim_data['cost_m1']:.3f} | BDs: {sim_data['num_bds_m1']:.2f}")
+    print(f"Mode 2 (Periodic 5, Live EKF)   Calls: {sim_data['cloud_calls_m2']:.2f} | Cmax: {sim_data['makespan_m2']:.2f} | Cost: ${sim_data['cost_m2']:.3f} | BDs: {sim_data['num_bds_m2']:.2f}")
+    print(f"Mode 3 (Freq-Matched Op 25,50)  Calls: {sim_data['cloud_calls_m3']:.2f} | Cmax: {sim_data['makespan_m3']:.2f} | Cost: ${sim_data['cost_m3']:.3f} | BDs: {sim_data['num_bds_m3']:.2f}")
+    print(f"Mode 4 (One-Shot, Live EKF)     Calls: {sim_data['cloud_calls_m4']:.2f} | Cmax: {sim_data['makespan_m4']:.2f} | Cost: ${sim_data['cost_m4']:.3f} | BDs: {sim_data['num_bds_m4']:.2f}")
+    reduct = (sim_data["cloud_calls_m2"] - sim_data["cloud_calls_m5"]) / sim_data["cloud_calls_m2"] * 100.0
+    print(f"Mode 5 (Proposed CDI+EKF)       Calls: {sim_data['cloud_calls_m5']:.2f} (-{reduct:.1f}%) | Cmax: {sim_data['makespan_m5']:.2f} | Cost: ${sim_data['cost_m5']:.3f} | BDs: {sim_data['num_bds_m5']:.2f}")
 

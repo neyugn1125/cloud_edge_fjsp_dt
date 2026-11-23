@@ -117,23 +117,55 @@ def execute_right_shift_rescheduling(
     planned_ops: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
-    Execute Right-Shift Rescheduling (Classic Reactive Baseline):
-    - Dispatches operations following nominal Cloud schedule sequence.
-    - Monitors tool wear: when wear reaches 80% w_max or cut exceeds w_max,
-      executes reactive tool maintenance (10 min PM), right-shifting all downstream operations
-      on that machine.
-    - Operates at fixed nominal speed without dynamic speed-scaling to avoid peak TOU rates.
+    Execute Right-Shift Rescheduling (Fair EKF-Equipped Reactive Baseline):
+    - Dispatches operations following the nominal Cloud schedule machine and speed assignments
+      (right-shifting downstream operations whenever PM maintenance is inserted).
+    - Equipped with the IDENTICAL dual-sensor BreadboardDAQInterface + RealTimeToolWearEstimator
+      (Live EKF) and IDENTICAL PM safety rule as Proposed Cloud-Edge DT (strictly NO oracle
+      reading of twin.current_wear_um).
+    - Isolates the scheduling/speed-control difference: Right-Shift holds static Cloud machine/speed
+      assignments fixed, whereas Proposed DT dynamically adapts speed to TOU tariffs via ONNX
+      and triggers CDI-governed re-synchronization.
     """
+    if hasattr(env, "current_seed") and env.current_seed is not None:
+        random.seed(int(env.current_seed))
+        np.random.seed(int(env.current_seed))
+
+    daqs: Dict[str, BreadboardDAQInterface] = {}
+    estimators: Dict[str, RealTimeToolWearEstimator] = {}
+    for m_id in env.machine_ids:
+        daqs[m_id] = BreadboardDAQInterface(machine_id=m_id, mode="hardware_emulator")
+        daqs[m_id].send_command("CMD:CUTTING")
+        estimators[m_id] = RealTimeToolWearEstimator(machine_id=m_id)
+        estimators[m_id].reset(env.machines[m_id].base_initial_wear_um)
+
+    info: Dict[str, Any] = {}
     for op in planned_ops:
         j_idx = int(op["job_index"])
         m_id = op["machine_id"]
         m_idx = env.machine_ids.index(m_id)
         speed = int(op["speed_level"])
         twin = env.machines[m_id]
+        est = estimators[m_id]
+
+        w_hat = est.estimated_wear_um
+        sigma = est.sigma_ekf
         v_s = env.system_config.speed_scaling.levels[speed].speed_factor
-        est_inc = twin.base_eta * (v_s ** (twin.beta - 1)) * float(op["t_base_min"])
-        pm_flag = 1 if (twin.current_wear_um + est_inc >= twin.w_max_um or twin.current_wear_um >= 0.80 * twin.w_max_um or op.get("had_pm", False)) and twin.current_wear_um > 50.0 else 0
+        delta_w_nom = twin.base_eta * (v_s ** (twin.beta - 1)) * float(op["t_base_min"])
+        w_proj = w_hat + delta_w_nom + 2.0 * sigma + 2.0
+        pm_flag = 1 if ((w_proj >= 82.0 or (w_hat + 2.0 * sigma >= 78.0) or op.get("had_pm", False)) and w_hat >= 50.5) else 0
+
         obs, r, term, tr, info = env.step((j_idx, m_idx, speed, pm_flag))
+
+        last_event = env.scheduled_events[-1]
+        if last_event["had_pm"] or env.machines[m_id].current_wear_um == 0.0:
+            estimators[m_id].reset(0.0)
+
+        actual_wear = env.machines[m_id].current_wear_um
+        daqs[m_id].set_operating_conditions(speed_level=speed, true_wear_um=actual_wear)
+        for _ in range(12):
+            tel = daqs[m_id].read_telemetry(dt_ms=100)
+            estimators[m_id].estimate_wear(tel, speed_level=speed, sensor_mode="fusion", use_filter=True)
     return info
 
 

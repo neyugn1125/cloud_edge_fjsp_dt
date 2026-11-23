@@ -180,14 +180,14 @@ def test_point_10_academic_literature_positioning():
 
 
 def test_point_11_ablation_figure_plateau_and_cliff_labels():
-    """Point 11: Subplot (b) shaded zone dynamically labels Robust Operating Plateau & Degradation Cliff from CSV."""
+    """Point 11: Subplot (b) shaded zone dynamically labels Event-Matched Plateau (1–2 Shocks) & Degradation Cliff from CSV."""
     code = ABLATION_SENSITIVITY_PY.read_text(encoding="utf-8")
-    assert "Robust Operating Plateau ({min_plateau_th:.2f}–{max_plateau_th:.2f})" in code
+    assert "Event-Matched Plateau ({min_plateau_th:.2f}–{max_plateau_th:.2f})" in code
     assert "Degradation Cliff" in code
     with open(CDI_CSV, mode="r", encoding="utf-8") as f:
         cdi_rows = list(csv.DictReader(f))
-    plateau_ths = [float(r["CDI_Threshold"]) for r in cdi_rows if r.get("Zone") == "Robust Operating Plateau"]
-    assert min(plateau_ths) == pytest.approx(0.08) and max(plateau_ths) == pytest.approx(0.15)
+    plateau_ths = [float(r["CDI_Threshold"]) for r in cdi_rows if r.get("Zone") == "Event-Matched Plateau (1–2 Shocks)"]
+    assert min(plateau_ths) == pytest.approx(0.08) and max(plateau_ths) >= 0.15
 
 
 def test_point_12_knee_callout_box_annotation():

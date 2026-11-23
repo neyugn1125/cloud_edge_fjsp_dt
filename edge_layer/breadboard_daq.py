@@ -107,7 +107,7 @@ class BreadboardDAQInterface:
         mode: str = "hardware_emulator",
         port: str = "/dev/ttyUSB0",
         baudrate: int = 115200,
-        timeout: float = 1.0,
+        timeout: float = 0.3,
         config_path: str = "config/system_params.yaml",
         machine_id: str = "M1",
         p_cut_base_w: float = 45.0,
@@ -242,8 +242,24 @@ class BreadboardDAQInterface:
         if self.mode == "real_serial":
             if not self.serial_conn or not self.serial_conn.is_open:
                 raise ConnectionError("Serial connection is not active.")
+            start_wall = time.monotonic()
+            empty_reads = 0
             for _ in range(max_attempts):
-                raw_line = self.serial_conn.readline()
+                try:
+                    raw_line = self.serial_conn.readline()
+                except Exception as e:
+                    raise ConnectionError(f"ESP32 serial connection lost: {e}") from e
+
+                if raw_line == b"" or raw_line == "":
+                    empty_reads += 1
+                    elapsed_s = time.monotonic() - start_wall
+                    if elapsed_s >= self.timeout or empty_reads >= 3:
+                        raise TimeoutError(
+                            f"ESP32 telemetry UART timeout after {max(elapsed_s, self.timeout):.3f}s"
+                        )
+                    continue
+
+                empty_reads = 0
                 line = (
                     raw_line.decode("utf-8", errors="ignore").strip()
                     if isinstance(raw_line, (bytes, bytearray))
