@@ -180,14 +180,14 @@ def test_point_10_academic_literature_positioning():
 
 
 def test_point_11_ablation_figure_plateau_and_cliff_labels():
-    """Point 11: Subplot (b) shaded zone dynamically labels Event-Matched Plateau (1–2 Shocks) & Degradation Cliff from CSV."""
+    """Point 11: Subplot (b) plots continuous Pareto/trade-off curve without arbitrary Zone classifications."""
     code = ABLATION_SENSITIVITY_PY.read_text(encoding="utf-8")
-    assert "Event-Matched Plateau ({min_plateau_th:.2f}–{max_plateau_th:.2f})" in code
-    assert "Degradation Cliff" in code
+    assert "axvspan" not in code, "Arbitrary background zone axvspan shading must be removed."
+    assert "Degradation Cliff" not in code, "Hardcoded Degradation Cliff label must be removed."
+    assert "Deployment Configuration (θ_th = 0.12)" in code
     with open(CDI_CSV, mode="r", encoding="utf-8") as f:
         cdi_rows = list(csv.DictReader(f))
-    plateau_ths = [float(r["CDI_Threshold"]) for r in cdi_rows if r.get("Zone") == "Event-Matched Plateau (1–2 Shocks)"]
-    assert min(plateau_ths) == pytest.approx(0.08) and max(plateau_ths) >= 0.15
+    assert len(cdi_rows) == 10 and "Zone" not in cdi_rows[0]
 
 
 def test_point_12_knee_callout_box_annotation():

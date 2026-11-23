@@ -218,9 +218,9 @@ if __name__ == "__main__":
     print(f"  HIL Mode 5   : Cmax = {m5['final_makespan_min']}m, Cost = ${m5['tou_energy_cost_usd']}, Energy = {m5['total_energy_kwh']} kWh, Max CDI = {m5['max_cdi']}, Calls = {m5['cloud_reschedule_calls']}")
     print("  -> PASSED: Exact 100% numerical synchronization & all Max CDI < 0.60!")
 
-    print("\n[CHECK 6] CDI Sensitivity 9-Point Monotonicity:")
+    print("\n[CHECK 6] CDI Sensitivity Monotonicity:")
     for r in data["cdi"]:
-        print(f"  theta_th = {float(r['CDI_Threshold']):4.2f} -> Cloud Calls: {float(r['Cloud_Calls_Mean']):5.2f} ± {float(r['Cloud_Calls_Std']):4.2f} | Cmax: {float(r['Makespan_Mean (min)']):5.2f}m | Cost: ${float(r['TOU_Cost_Mean ($)']):5.3f} | {r['Zone']}")
+        print(f"  theta_th = {float(r['CDI_Threshold']):4.2f} -> Cloud Calls: {float(r['Cloud_Calls_Mean']):5.2f} ± {float(r['Cloud_Calls_Std']):4.2f} | Cmax: {float(r['Makespan_Mean (min)']):5.2f}m | Cost: ${float(r['TOU_Cost_Mean ($)']):5.3f} | SysIdx: {float(r['Total_System_Cost_Index']):.4f}")
     print("  -> PASSED: Monotonically decreasing from 41.80 to 0.00 calls!")
 
     print("\n[CHECK 7] High-Resolution Publication Artifacts:")

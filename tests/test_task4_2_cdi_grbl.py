@@ -20,6 +20,7 @@ Verifies:
 """
 
 from pathlib import Path
+import time
 from typing import Any, Dict
 import numpy as np
 import pytest
@@ -590,9 +591,12 @@ def test_grbl_compute_decel_timeout_from_grbl_params():
     ctrl = GRBLHardwareController(mode="grbl_emulator")
     assert ctrl.grbl_max_rate_mm_min == pytest.approx(1000.0)
     assert ctrl.grbl_accel_mm_s2 == pytest.approx(10.0)
-    assert ctrl.compute_decel_timeout_s(ctrl.grbl_max_rate_mm_min, ctrl.grbl_accel_mm_s2) == pytest.approx(
+    assert ctrl.compute_decel_timeout_s(ctrl.grbl_max_rate_mm_min, ctrl.grbl_accel_mm_s2, 0.833) == pytest.approx(
         2.50, abs=1e-3
     )
+    # 3-axis dict evaluation with default margin_s=0.85:
+    # X: (2500/60)/50 = 0.8333, Y: (2500/60)/50 = 0.8333, Z: (1000/60)/25 = 0.6667 -> 0.8333 + 0.85 = 1.6833s
+    assert ctrl.compute_decel_timeout_s() == pytest.approx((2500.0 / 60.0) / 50.0 + 0.85, abs=1e-4)
 
     with pytest.raises(ValueError):
         GRBLHardwareController.compute_decel_timeout_s(1000.0, 0.0, 0.833)
@@ -722,6 +726,214 @@ def test_edge_node_telemetry_watchdog_trips_grbl_emergency_stop_on_esp32_timeout
     assert node_2.watchdog_tripped is True
     assert b"!" in mock_serial_2.writes
     assert grbl_2.grbl_state == "Hold"
+
+
+def test_grbl_read_settings_and_sync_decel_timeout_to_esp32():
+    """
+    Verify read_grbl_settings() sends $$ and parses $110-$112 and $120-$122,
+    computes worst-case deceleration timeout across X/Y/Z axes, and syncs
+    CMD:SET_DECEL_MS:<ms> down to the ESP32 interface.
+    """
+    class SettingsMockGRBLSerial:
+        def __init__(self, lines):
+            self._lines = list(lines)
+            self.writes = []
+            self._pending = False
+
+        def write(self, data):
+            self.writes.append(data)
+            if b"$$" in data:
+                self._pending = True
+
+        def flush(self):
+            pass
+
+        def readline(self):
+            if self._pending and self._lines:
+                return self._lines.pop(0)
+            return b""
+
+        def close(self):
+            pass
+
+    daq = BreadboardDAQInterface(mode="hardware_emulator", machine_id="M0")
+    sent_esp32_cmds = []
+    orig_send = daq.send_command
+
+    def capture_send(cmd):
+        sent_esp32_cmds.append(cmd)
+        return orig_send(cmd)
+
+    daq.send_command = capture_send
+
+    grbl = GRBLHardwareController(mode="grbl_emulator", esp32_interface=daq)
+    grbl.mode = "real_serial"
+    grbl.serial_conn = SettingsMockGRBLSerial([
+        b"$100=80.000\r\n",
+        b"$110=3000.0\r\n",
+        b"$111=3000.0\r\n",
+        b"$112=1000.0\r\n",
+        b"$120=50.0\r\n",
+        b"$121=50.0\r\n",
+        b"$122=25.0\r\n",
+        b"ok\r\n",
+    ])
+
+    timeout_ms = grbl.sync_decel_timeout_to_esp32()
+    # X/Y: (3000/60)/50 = 1.000s, Z: (1000/60)/25 = 0.667s -> max = 1.000 + 0.85 = 1.850s -> 1850 ms
+    expected_ms = int(round(((3000.0 / 60.0) / 50.0 + 0.85) * 1000.0))
+    assert b"$$\n" in grbl.serial_conn.writes
+    assert grbl.grbl_max_rates == {"X": 3000.0, "Y": 3000.0, "Z": 1000.0}
+    assert grbl.grbl_accels == {"X": 50.0, "Y": 50.0, "Z": 25.0}
+    assert timeout_ms == expected_ms == 1850
+    assert f"CMD:SET_DECEL_MS:{expected_ms}" in sent_esp32_cmds
+    assert daq.spindle_decel_wait_ms == expected_ms
+
+
+def test_background_telemetry_monitor_triggers_watchdog_mid_cut_without_dispatch():
+    """
+    Verify EdgeDigitalTwinNode.start_telemetry_monitor() runs a continuous 10 Hz
+    background watchdog thread that triggers grbl.emergency_stop() immediately
+    during CUTTING without calling dispatch_operation():
+    1. When read_telemetry() raises TimeoutError mid-cut.
+    2. When ESP32 telemetry stalls silently (> 300 ms without frames).
+    3. When telemetry reports sensor_ok=False / fault_latched=True mid-cut.
+    """
+    class BgMockGRBLSerial:
+        def __init__(self):
+            self.writes = []
+            self._pending_status = False
+
+        def write(self, data):
+            self.writes.append(data)
+            if data == b"?":
+                self._pending_status = True
+
+        def flush(self):
+            pass
+
+        def readline(self):
+            if self._pending_status:
+                self._pending_status = False
+                return b"<Hold:0|MPos:5.000,5.000,-1.000|FS:0,10000|Ov:100,100,100>\r\n"
+            return b"ok\r\n"
+
+        def close(self):
+            pass
+
+    def _valid_frame(ts_ms: int) -> Dict[str, Any]:
+        return {
+            "ts_ms": ts_ms,
+            "v_bus": 24.0,
+            "i_amp": 2.4,
+            "p_raw_w": 57.6,
+            "p_filt_w": 57.5,
+            "vib_rms_g": 0.92,
+            "ssr_state": "CUTTING",
+            "sensor_ok": True,
+            "fault_latched": False,
+            "i2c_err_cnt": 0,
+        }
+
+    # Case 1: ESP32 dies mid-cut (TimeoutError) without dispatch_operation()
+    daq_1 = BreadboardDAQInterface(mode="hardware_emulator", machine_id="M0")
+    call_idx = {"n": 0}
+
+    def read_then_die(dt_ms=100):
+        call_idx["n"] += 1
+        if call_idx["n"] <= 2:
+            return _valid_frame(call_idx["n"] * 100)
+        raise TimeoutError("ESP32 UART silent mid-cut")
+
+    daq_1.read_telemetry = read_then_die
+    serial_1 = BgMockGRBLSerial()
+    grbl_1 = GRBLHardwareController(mode="grbl_emulator", esp32_interface=daq_1)
+    grbl_1.mode = "real_serial"
+    grbl_1.serial_conn = serial_1
+    grbl_1.set_machine_state("CUTTING")
+
+    node_1 = EdgeDigitalTwinNode(machine_id="M0", daq_interface=daq_1, grbl_controller=grbl_1)
+    node_1.start_telemetry_monitor(poll_interval_s=0.02)
+    try:
+        deadline = time.monotonic() + 1.0
+        while not node_1.watchdog_tripped and time.monotonic() < deadline:
+            time.sleep(0.02)
+    finally:
+        node_1.stop_telemetry_monitor()
+
+    assert node_1.watchdog_tripped is True
+    assert node_1.last_trigger_payload is not None
+    assert node_1.last_trigger_payload.reason == "ESP32_WATCHDOG_TIMEOUT"
+    assert b"!" in serial_1.writes
+    assert b"\x18" in serial_1.writes
+    assert daq_1.ssr_state == "OFF"
+    assert grbl_1.grbl_state == "Hold"
+
+    # Case 2: ESP32 silently stops yielding packets (> 300 ms elapsed without exception)
+    daq_2 = BreadboardDAQInterface(mode="hardware_emulator", machine_id="M0")
+    stall_state = {"n": 0}
+
+    def read_then_stall(dt_ms=100):
+        stall_state["n"] += 1
+        if stall_state["n"] == 1:
+            return _valid_frame(100)
+        return None
+
+    daq_2.read_telemetry = read_then_stall
+    serial_2 = BgMockGRBLSerial()
+    grbl_2 = GRBLHardwareController(mode="grbl_emulator", esp32_interface=daq_2)
+    grbl_2.mode = "real_serial"
+    grbl_2.serial_conn = serial_2
+    grbl_2.set_machine_state("CUTTING")
+
+    node_2 = EdgeDigitalTwinNode(machine_id="M0", daq_interface=daq_2, grbl_controller=grbl_2)
+    node_2.start_telemetry_monitor(poll_interval_s=0.02)
+    try:
+        deadline = time.monotonic() + 1.0
+        while not node_2.watchdog_tripped and time.monotonic() < deadline:
+            time.sleep(0.02)
+    finally:
+        node_2.stop_telemetry_monitor()
+
+    assert node_2.watchdog_tripped is True
+    assert node_2.last_trigger_payload.reason == "ESP32_WATCHDOG_TIMEOUT"
+    assert b"!" in serial_2.writes
+    assert grbl_2.grbl_state == "Hold"
+
+    # Case 3: Background monitor detects sensor_ok=False mid-cut
+    daq_3 = BreadboardDAQInterface(mode="hardware_emulator", machine_id="M0")
+    fault_state = {"n": 0}
+
+    def read_then_fault(dt_ms=100):
+        fault_state["n"] += 1
+        if fault_state["n"] <= 2:
+            return _valid_frame(fault_state["n"] * 100)
+        bad = _valid_frame(fault_state["n"] * 100)
+        bad["sensor_ok"] = False
+        bad["fault_latched"] = True
+        return bad
+
+    daq_3.read_telemetry = read_then_fault
+    serial_3 = BgMockGRBLSerial()
+    grbl_3 = GRBLHardwareController(mode="grbl_emulator", esp32_interface=daq_3)
+    grbl_3.mode = "real_serial"
+    grbl_3.serial_conn = serial_3
+    grbl_3.set_machine_state("CUTTING")
+
+    node_3 = EdgeDigitalTwinNode(machine_id="M0", daq_interface=daq_3, grbl_controller=grbl_3)
+    node_3.start_telemetry_monitor(poll_interval_s=0.02)
+    try:
+        deadline = time.monotonic() + 1.0
+        while not node_3.trigger_cloud_reschedule and time.monotonic() < deadline:
+            time.sleep(0.02)
+    finally:
+        node_3.stop_telemetry_monitor()
+
+    assert node_3.trigger_cloud_reschedule is True
+    assert node_3.last_trigger_payload.reason == "ESP32_SENSOR_FAULT"
+    assert b"!" in serial_3.writes
+    assert grbl_3.grbl_state == "Hold"
+
 
 
 

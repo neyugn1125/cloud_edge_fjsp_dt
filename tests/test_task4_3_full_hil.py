@@ -421,9 +421,28 @@ def run_closed_loop_hil_simulation(
         if trigger:
             cloud_calls += 1
             resync_points.append(step_i)
+
+            # Measured Cloud Warm-Start NSGA-III Resync latency (2.6835 s) + round-trip MQTT RTT
+            emp_resync_s = float(MEASURED_LATENCIES.get("cloud_nsga3_resync_solve_s", {}).get("mean", 2.6835))
+            emp_mqtt_s = float(MEASURED_LATENCIES.get("mqtt_loopback_rtt_ms", {}).get("mean", 0.081377)) / 1000.0
+            call_overhead_s = emp_resync_s + 2.0 * emp_mqtt_s
+            call_overhead_min = call_overhead_s / 60.0
+            resync_durations_s.append(call_overhead_s)
+
+            # In-loop physical resync wait: accumulate IDLE energy/TOU cost & advance machine clocks
+            for m_k in env.machines.values():
+                t0_wait = float(m_k.available_time)
+                t1_wait = t0_wait + call_overhead_min
+                e_wait = float(m_k.p_idle_kw) * (call_overhead_min / 60.0)
+                c_wait = float(env._integrate_tou_cost(float(m_k.p_idle_kw), t0_wait, t1_wait))
+                m_k.available_time = t1_wait
+                m_k.e_idle_kwh += e_wait
+                env.total_cost += c_wait
+            env.cmax = max(float(m_k.available_time) for m_k in env.machines.values())
+
             anchor_step = step_i
-            c_act_anchor = c_act_k
-            e_act_anchor = e_act_k
+            c_act_anchor = float(env.cmax)
+            e_act_anchor = float(sum(float(m_k.total_energy_kwh) for m_k in env.machines.values()))
 
             current_cloud_ops = fast_heuristic_resync(
                 env,
@@ -435,12 +454,6 @@ def run_closed_loop_hil_simulation(
             cmax_nominal, energy_nominal, planned_cum_cmax, planned_cum_energy = compute_planned_trajectories(
                 env, current_cloud_ops, anchor_step=anchor_step, c_anchor=c_act_anchor, e_anchor=e_act_anchor
             )
-
-            # Measured Cloud Warm-Start NSGA-III Resync latency (2.6835 s) + round-trip MQTT RTT
-            emp_resync_s = float(MEASURED_LATENCIES.get("cloud_nsga3_resync_solve_s", {}).get("mean", 2.6835))
-            emp_mqtt_s = float(MEASURED_LATENCIES.get("mqtt_loopback_rtt_ms", {}).get("mean", 0.081377)) / 1000.0
-            call_overhead_s = emp_resync_s + 2.0 * emp_mqtt_s
-            resync_durations_s.append(call_overhead_s)
 
         cdi_trace.append(float(cdi))
 
@@ -459,9 +472,8 @@ def run_closed_loop_hil_simulation(
             extra_energy += e_gap
 
     comm_overhead_s = sum(resync_durations_s)
-    solver_lat_min = comm_overhead_s / 60.0
 
-    makespan = float(cmax_final + solver_lat_min)
+    makespan = float(cmax_final)
     cost = float(env.total_cost + extra_cost)
     energy = float(final_info["total_energy_kwh"] + extra_energy)
     num_pm = int(final_info["total_pm_replacements"])

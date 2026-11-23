@@ -8,7 +8,7 @@
 ---
 
 ## Abstract
-Dynamic Flexible Job Shop Scheduling Problems (D-FJSP) in discrete manufacturing face severe operational uncertainties, including non-linear tool degradation, time-varying electricity tariffs, and strict real-time control constraints. While centralized Cloud metaheuristics yield high-quality global Pareto schedules, their computational latency ($4.24 \pm 0.03\,\text{s}$ on Mk01, $14.97\,\text{s}$ on Mk03; $2.6835\,\text{s}$ warm-start resync) precludes real-time disturbance reaction. Conversely, distributed edge dispatching policies provide rapid reactivity but suffer from localized myopia, peak-tariff overloading, and premature tool breakage. This paper presents a closed-loop **Cloud-Edge Collaborative Digital Twin (DT)** framework that harmonizes long-term energy-cost optimization with sub-millisecond shop-floor control. The framework comprises: (1) a Cloud macro-optimizer executing reference-direction NSGA-III over Makespan ($C_{\max}$), Time-of-Use (TOU) energy cost, and Total Weighted Tardiness (TWT); (2) an Edge micro-controller powered by a scale-invariant MLP policy trained via Maskable Proximal Policy Optimization (MaskablePPO) and executed on ONNX Runtime in $0.0132\,\text{ms}$ forward pass and $0.1506\,\text{ms}$ per full decision step ($\sim 2.81 \times 10^4 \times$ faster than Cloud optimization); (3) a shift-normalized Cumulative Disturbance Index ($\text{CDI}(t)$) deployed at $\theta_{\text{th}} = 0.12$ within the objective Event-Matched Plateau $[0.08, 0.18]$ ($1$–$2$ calls matched to $N_{\text{shocks}} = 2.0$, whereas $\theta_{\text{th}}^* = 0.05$ minimizes `Total_System_Cost_Index` at $1.0325$ with $2.70$ over-triggered calls), reducing online Cloud Warm-Start rescheduling calls by $87.3\%$ ($1.27 \pm 0.44$ vs. $10.00$ periodic calls; $36.5\%$ fewer than fixed frequency-matched Op 25/50 periodic calls at $2.00$) and cutting TOU electricity cost by $8.5\%$ relative to high-frequency periodic EKF resync ($p = 0.0067$); and (4) an opto-isolated solid-state relay (SSR) mechatronic subsystem enabling zero-loss standby transitions ($T_{\text{BE}} \in [8.36, 10.54]\,\text{min}$ on shop-floor CNC centers; $T_{\text{BE}} \approx 3.1\,\text{min}$ on hardware proxy) with Stop Category 1 hardware safety interlocks (`GPIO 27` Open-Drain GRBL `Feed Hold`, $2500\,\text{ms}$ / $2.50\,\text{s}$ kinematic deceleration sync, and $300\,\text{ms}$ Host Watchdog). Audited across 750 independent experimental runs (15 test seeds, Brandimarte Mk01–Mk05) against 9 competing baselines, the proposed framework eliminates catastrophic tool failures ($0.00$ breakdowns vs. $0.33 - 12.67$ for open-loop baselines), reduces TOU energy costs by up to $30.95\%$ via SSR standby gating (saving $\$6.223$ per shift on Mk03 vs. the idle-only baseline; or $+44.82\%$ cost penalty when SSR standby is omitted), achieves mean $\overline{\text{HV}} = 0.4702$ and $\overline{\text{IGD}} = 0.3675$, and achieves statistically significant Hypervolume superiority over all 4 open-loop metaheuristics on bottleneck Mk05 ($p_{\text{holm}} \le 0.0011$) and over NSGA-III ($p_{\text{holm}} = 0.0214$) and NSGA-II ($p_{\text{holm}} = 0.0410$) on large-scale Mk03. When reactive Right-Shift Rescheduling is fairly equipped with the identical live EKF wear estimator and PM safety rule to also achieve $0.00$ breakdowns, two-sided Wilcoxon tests show no statistically significant difference in Hypervolume on Mk01 ($p_{\text{holm}} = 0.2768$) and Mk04 ($p_{\text{holm}} = 0.1508$), while Right-Shift achieves statistically higher Hypervolume on Mk02 ($p_{\text{holm}} = 0.0043$), Mk03 ($p_{\text{holm}} = 0.0043$), and Mk05 ($p_{\text{holm}} = 0.0005$), and the Proposed DT lowers TOU electricity cost by $8.44\%$ on bottleneck Mk05 (\$11.198 vs. \$12.230). Physical validation on an ESP32 dual-sensor CNC breadboard in high-fidelity electro-mechanical emulation with unmodeled material and thermal disturbances confirms robust real-time tool wear estimation ($R^2 = 0.9984$ during active cutting, $R^2 = 0.9951$ across the full 60s operational profile with $\text{RMSE} = 1.763\,\mu\text{m}$) and safe non-preemptive overrun boundaries.
+Dynamic Flexible Job Shop Scheduling Problems (D-FJSP) in discrete manufacturing face severe operational uncertainties, including non-linear tool degradation, time-varying electricity tariffs, and strict real-time control constraints. While centralized Cloud metaheuristics yield high-quality global Pareto schedules, their computational latency ($4.24 \pm 0.03\,\text{s}$ on Mk01, $14.97\,\text{s}$ on Mk03; $2.6835\,\text{s}$ warm-start resync) precludes real-time disturbance reaction. Conversely, distributed edge dispatching policies provide rapid reactivity but suffer from localized myopia, peak-tariff overloading, and premature tool breakage. This paper presents a closed-loop **Cloud-Edge Collaborative Digital Twin (DT)** framework that harmonizes long-term energy-cost optimization with sub-millisecond shop-floor control. The framework comprises: (1) a Cloud macro-optimizer executing reference-direction NSGA-III over Makespan ($C_{\max}$), Time-of-Use (TOU) energy cost, and Total Weighted Tardiness (TWT); (2) an Edge micro-controller powered by a scale-invariant MLP policy trained via Maskable Proximal Policy Optimization (MaskablePPO) and executed on ONNX Runtime in $0.0132\,\text{ms}$ forward pass and $0.1506\,\text{ms}$ per full decision step ($\sim 2.81 \times 10^4 \times$ faster than Cloud optimization); (3) a shift-normalized Cumulative Disturbance Index ($\text{CDI}(t)$) navigating the continuous Pareto trade-off between resynchronization frequency and schedule cost over $\theta_{\text{th}} \in [0.02, 0.50]$: while $\theta_{\text{th}}^* = 0.05$ minimizes the weighted `Total_System_Cost_Index` at $1.0322$ ($2.70$ calls, $63.15\,\text{min}$), the deployed configuration $\theta_{\text{th}} = 0.12$ prioritizes Cloud-load and TOU cost reduction ($1.40 \pm 0.49$ calls, &#36;2.647 on validation seeds). In 5-mode HIL evaluation, $\theta_{\text{th}} = 0.12$ (Mode 5) reduces Cloud Warm-Start calls by $87.3\%$ vs. high-frequency periodic EKF resync (Mode 2: $1.27 \pm 0.44$ vs. $10.00$) and cuts TOU electricity cost by $6.9\%$ ($p = 0.0067$) while trading $+7.8\%$ longer makespan vs. Mode 2 ($p = 0.0479$) and $+17.1\%$ vs. Mode 1 ($p < 0.0001$); compared to frequency-matched periodic resync at Op 25/50 (Mode 3: $2.00$ calls), Mode 5 reduces Cloud calls by $36.5\%$ with no statistically significant difference in Makespan ($p = 0.4303$) or TOU cost ($p = 0.9780$); and (4) an opto-isolated solid-state relay (SSR) mechatronic subsystem enabling zero-loss standby transitions ($T_{\text{BE}} \in [8.36, 10.54]\,\text{min}$ on shop-floor CNC centers; $T_{\text{BE}} \approx 3.1\,\text{min}$ on hardware proxy) with Stop Category 1 hardware safety interlocks (`GPIO 27` Open-Drain GRBL `Feed Hold`, dynamic GRBL `$$` `$110–$112`/`$120–$122` kinematic deceleration sync via `CMD:SET_DECEL_MS`, and continuous $10\,\text{Hz}$ / $300\,\text{ms}$ Host Watchdog thread). Audited across 750 independent experimental runs (15 test seeds, Brandimarte Mk01–Mk05) against 9 competing baselines, the proposed framework eliminates catastrophic tool failures compared to open-loop metaheuristics ($0.00$ vs. $0.33 - 12.67$) and standalone edge PPO ($0.00$ vs. $0.53 - 6.27$), matching the $0.00$ failure rate of EKF-equipped Right-Shift Rescheduling. It reduces TOU energy costs by up to $30.95\%$ via SSR standby gating (saving &#36;6.223 per shift on Mk03 vs. the idle-only baseline; or $+44.82\%$ cost penalty when omitted), achieves mean $\overline{\text{HV}} = 0.4702$ and $\overline{\text{IGD}} = 0.3675$, and achieves statistically significant Hypervolume superiority over all 4 open-loop metaheuristics on bottleneck Mk05 ($p_{\text{holm}} \le 0.0011$) and over NSGA-III ($p_{\text{holm}} = 0.0214$) and NSGA-II ($p_{\text{holm}} = 0.0410$) on Mk03. Relative to fair EKF-equipped Right-Shift Rescheduling, two-sided Wilcoxon tests show no statistically significant difference in Hypervolume on Mk01 ($p_{\text{holm}} = 0.2768$) and Mk04 ($p_{\text{holm}} = 0.1508$), whereas Right-Shift achieves statistically higher Hypervolume on Mk02 ($p_{\text{holm}} = 0.0043$), Mk03 ($p_{\text{holm}} = 0.0043$), and Mk05 ($p_{\text{holm}} = 0.0005$) by preserving fixed topology without peak-tariff throttling, while Proposed DT saves $8.44\%$ TOU electricity cost on bottleneck Mk05 (&#36;11.198 vs. &#36;12.230) through dynamic TOU speed adaptation. Physical validation on an ESP32 dual-sensor CNC breadboard in high-fidelity electro-mechanical emulation with unmodeled material and thermal disturbances confirms robust real-time tool wear estimation ($R^2 = 0.9984$ during active cutting, $R^2 = 0.9951$ across the full 60s operational profile with $\text{RMSE} = 1.763\,\mu\text{m}$) and safe non-preemptive overrun boundaries.
 
 ---
 
@@ -128,58 +128,63 @@ Ten distinct scheduling and dispatching paradigms were evaluated ($10 \text{ met
 ```
 Table 1: Comprehensive Multi-Objective Benchmark Results across Brandimarte Mk01–Mk05 (Mean ± Std, n=15 runs per cell)
 ```
-| Instance | Method | Hypervolume (HV) $\uparrow$ | IGD $\downarrow$ | Makespan $C_{\max}$ (min) $\downarrow$ | TOU Cost (\$) $\downarrow$ | Tardiness TWT (min) $\downarrow$ | Tool Failures $\downarrow$ | Cliff's $\delta$ | $p_{\text{holm}}$ |
+| Instance | Method | Hypervolume (HV) $\uparrow$ | IGD $\downarrow$ | Makespan $C_{\max}$ (min) $\downarrow$ | TOU Cost (&#36;) $\downarrow$ | Tardiness TWT (min) $\downarrow$ | Tool Failures $\downarrow$ | Cliff's $\delta$ | $p_{\text{holm}}$ |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Mk01**<br>(10x6, 55 ops) | Rule-SPT-Fast | $0.0890 \pm 0.0172$ | $0.8353 \pm 0.0425$ | $116.22 \pm 1.57$ | \$3.127 \pm 0.118 | $550.7 \pm 27.2$ | 4.80 | +1.00 | < 0.001 |
-|  | Rule-EET-Eco | $0.3441 \pm 0.0263$ | $0.4914 \pm 0.0268$ | $94.67 \pm 2.49$ | \$2.455 \pm 0.043 | $424.1 \pm 11.3$ | 0.00 | +0.41 | 0.2768 |
-|  | Rule-EDD-Bal | $0.0396 \pm 0.0227$ | $1.0198 \pm 0.1137$ | $124.55 \pm 8.38$ | \$3.662 \pm 0.070 | $544.3 \pm 80.7$ | 0.00 | +1.00 | < 0.001 |
-|  | Right-Shift Rescheduling | $0.4967 \pm 0.1268$ | $0.3527 \pm 0.1052$ | $81.17 \pm 6.74$ | \$2.546 \pm 0.120 | $345.8 \pm 99.4$ | 0.00 | -0.40 | 0.2768 |
-|  | NSGA-II (Open-Loop) | $0.4845 \pm 0.2341$ | $0.3986 \pm 0.2066$ | $82.69 \pm 11.90$ | \$2.573 \pm 0.199 | $365.4 \pm 159.8$ | 0.73 | -0.21 | 0.5537 |
-|  | MOEA-D (Open-Loop) | $0.5326 \pm 0.1997$ | $0.3439 \pm 0.1478$ | $79.77 \pm 10.15$ | \$2.606 \pm 0.127 | $323.2 \pm 128.2$ | 0.80 | -0.38 | 0.3616 |
-|  | RVEA (Open-Loop) | $0.6183 \pm 0.2444$ | $0.3655 \pm 0.1659$ | $67.47 \pm 10.34$ | \$3.052 \pm 0.368 | $184.0 \pm 105.6$ | 0.60 | -0.62 | 0.1293 |
-|  | NSGA-III (Open-Loop) | $0.4693 \pm 0.1798$ | $0.3952 \pm 0.1517$ | $83.64 \pm 11.90$ | \$2.570 \pm 0.233 | $362.7 \pm 101.7$ | 0.87 | -0.21 | 0.5614 |
-|  | Standalone Edge PPO | $0.0548 \pm 0.0179$ | $0.9275 \pm 0.0611$ | $110.42 \pm 3.77$ | \$3.245 \pm 0.136 | $673.6 \pm 45.8$ | 0.00 | +1.00 | < 0.001 |
-|  | **Proposed Cloud-Edge DT** | **$0.4103 \pm 0.1024$** | **$0.3948 \pm 0.0989$** | **$86.00 \pm 9.79$** | **\$2.793 \pm 0.183** | **$330.0 \pm 60.5$** | **0.00** | **Base** | **Base** |
-| **Mk02**<br>(10x6, 58 ops) | Rule-SPT-Fast | $0.1294 \pm 0.0761$ | $0.8218 \pm 0.1708$ | $110.98 \pm 16.66$ | \$3.323 \pm 0.173 | $513.5 \pm 146.4$ | 5.67 | +1.00 | < 0.001 |
-|  | Rule-EET-Eco | $0.1173 \pm 0.0331$ | $0.8174 \pm 0.0485$ | $98.73 \pm 2.46$ | \$1.962 \pm 0.033 | $707.5 \pm 33.2$ | 0.00 | +1.00 | < 0.001 |
-|  | Rule-EDD-Bal | $0.1385 \pm 0.0346$ | $0.8148 \pm 0.0631$ | $85.69 \pm 2.79$ | \$4.311 \pm 0.240 | $304.2 \pm 17.2$ | 0.00 | +1.00 | < 0.001 |
-|  | Right-Shift Rescheduling | $0.7429 \pm 0.0997$ | $0.2237 \pm 0.0335$ | $67.33 \pm 7.12$ | \$2.186 \pm 0.205 | $179.0 \pm 52.5$ | 0.00 | -0.63 | 0.0043 |
-|  | NSGA-II (Open-Loop) | $0.6466 \pm 0.1645$ | $0.2767 \pm 0.0982$ | $69.11 \pm 10.70$ | \$2.172 \pm 0.173 | $265.9 \pm 102.0$ | 0.60 | -0.28 | 0.7571 |
-|  | MOEA-D (Open-Loop) | $0.5733 \pm 0.1908$ | $0.3239 \pm 0.0754$ | $70.52 \pm 10.39$ | \$2.345 \pm 0.271 | $294.8 \pm 99.5$ | 0.87 | +0.15 | 0.8904 |
-|  | RVEA (Open-Loop) | $0.7062 \pm 0.2558$ | $0.3603 \pm 0.1097$ | $54.86 \pm 8.23$ | \$2.846 \pm 0.445 | $157.9 \pm 97.8$ | 0.80 | -0.23 | 0.7571 |
-|  | NSGA-III (Open-Loop) | $0.7691 \pm 0.1572$ | $0.2290 \pm 0.0424$ | $66.29 \pm 9.09$ | \$2.095 \pm 0.162 | $188.2 \pm 84.1$ | 0.33 | -0.59 | 0.0269 |
-|  | Standalone Edge PPO | $0.1471 \pm 0.1101$ | $0.8160 \pm 0.1898$ | $99.79 \pm 18.09$ | \$3.399 \pm 0.251 | $527.3 \pm 207.5$ | 0.53 | +0.98 | < 0.001 |
-|  | **Proposed Cloud-Edge DT** | **$0.5828 \pm 0.1517$** | **$0.3262 \pm 0.0921$** | **$72.31 \pm 10.53$** | **\$2.466 \pm 0.355** | **$237.7 \pm 110.6$** | **0.00** | **Base** | **Base** |
-| **Mk03**<br>(15x8, 150 ops) | Rule-SPT-Fast | $0.2353 \pm 0.0377$ | $0.5716 \pm 0.0489$ | $547.20 \pm 11.86$ | \$17.007 \pm 0.472 | $5394.7 \pm 260.1$ | 19.20 | +0.79 | 0.0051 |
-|  | Rule-EET-Eco | $0.4803 \pm 0.1242$ | $0.3858 \pm 0.1013$ | $512.67 \pm 32.41$ | \$13.323 \pm 0.275 | $4542.0 \pm 474.9$ | 1.40 | +0.24 | 0.9084 |
-|  | Rule-EDD-Bal | $0.0755 \pm 0.0443$ | $0.9729 \pm 0.0955$ | $619.12 \pm 48.85$ | \$26.912 \pm 0.867 | $3079.4 \pm 433.4$ | 4.87 | +1.00 | < 0.001 |
-|  | Right-Shift Rescheduling | $0.7707 \pm 0.1161$ | $0.2530 \pm 0.0274$ | $427.21 \pm 24.54$ | \$13.362 \pm 0.555 | $3769.2 \pm 587.4$ | 0.00 | -0.62 | 0.0043 |
-|  | NSGA-II (Open-Loop) | $0.3583 \pm 0.1276$ | $0.4670 \pm 0.1318$ | $507.85 \pm 47.47$ | \$14.506 \pm 0.677 | $5220.6 \pm 644.7$ | 10.07 | +0.52 | 0.0410 |
-|  | MOEA-D (Open-Loop) | $0.4295 \pm 0.1877$ | $0.4273 \pm 0.1622$ | $496.38 \pm 44.33$ | \$14.649 \pm 0.390 | $4888.5 \pm 1040.2$ | 10.47 | +0.32 | 0.9084 |
-|  | RVEA (Open-Loop) | $0.5662 \pm 0.1878$ | $0.3457 \pm 0.0981$ | $445.82 \pm 31.79$ | \$15.346 \pm 0.670 | $4280.2 \pm 1047.0$ | 12.00 | -0.00 | 0.9084 |
-|  | NSGA-III (Open-Loop) | $0.3453 \pm 0.1147$ | $0.4784 \pm 0.1221$ | $514.37 \pm 25.12$ | \$14.280 \pm 0.517 | $5239.8 \pm 815.4$ | 9.67 | +0.57 | 0.0214 |
-|  | Standalone Edge PPO | $0.1001 \pm 0.0454$ | $0.8780 \pm 0.0838$ | $438.62 \pm 44.32$ | \$26.469 \pm 1.338 | $5093.4 \pm 591.9$ | 6.27 | +1.00 | < 0.001 |
-|  | **Proposed Cloud-Edge DT** | **$0.5477 \pm 0.2102$** | **$0.3516 \pm 0.1398$** | **$462.69 \pm 45.99$** | **\$13.883 \pm 0.677** | **$4621.8 \pm 889.6$** | **0.00** | **Base** | **Base** |
-| **Mk04**<br>(15x8, 90 ops) | Rule-SPT-Fast | $0.0652 \pm 0.0240$ | $0.8796 \pm 0.0681$ | $188.05 \pm 10.17$ | \$6.811 \pm 0.127 | $1942.4 \pm 97.4$ | 8.53 | +1.00 | < 0.001 |
-|  | Rule-EET-Eco | $0.1464 \pm 0.0270$ | $0.6389 \pm 0.0444$ | $195.60 \pm 4.47$ | \$4.430 \pm 0.141 | $2038.0 \pm 49.3$ | 0.00 | +0.96 | < 0.001 |
-|  | Rule-EDD-Bal | $0.0833 \pm 0.0063$ | $0.8581 \pm 0.0156$ | $196.24 \pm 4.35$ | \$6.740 \pm 0.145 | $1414.7 \pm 26.6$ | 0.00 | +1.00 | < 0.001 |
-|  | Right-Shift Rescheduling | $0.5081 \pm 0.1781$ | $0.3273 \pm 0.1262$ | $152.40 \pm 10.83$ | \$4.547 \pm 0.225 | $1546.9 \pm 398.6$ | 0.00 | -0.43 | 0.1508 |
-|  | NSGA-II (Open-Loop) | $0.3237 \pm 0.1499$ | $0.4472 \pm 0.1483$ | $168.22 \pm 15.41$ | \$4.542 \pm 0.382 | $1840.5 \pm 348.0$ | 2.53 | +0.25 | 0.4280 |
-|  | MOEA-D (Open-Loop) | $0.4374 \pm 0.2159$ | $0.3926 \pm 0.1857$ | $162.66 \pm 23.47$ | \$4.660 \pm 0.380 | $1596.2 \pm 279.5$ | 2.87 | -0.16 | 1.0000 |
-|  | RVEA (Open-Loop) | $0.4047 \pm 0.2414$ | $0.4824 \pm 0.1735$ | $157.56 \pm 21.13$ | \$5.319 \pm 0.569 | $1508.7 \pm 467.3$ | 3.47 | -0.01 | 1.0000 |
-|  | NSGA-III (Open-Loop) | $0.3603 \pm 0.1830$ | $0.4257 \pm 0.1386$ | $166.18 \pm 15.65$ | \$4.462 \pm 0.336 | $1784.7 \pm 373.7$ | 2.47 | +0.20 | 1.0000 |
-|  | Standalone Edge PPO | $0.1945 \pm 0.1139$ | $0.7371 \pm 0.1331$ | $151.79 \pm 16.68$ | \$6.835 \pm 0.451 | $1476.8 \pm 252.8$ | 0.80 | +0.68 | 0.0037 |
-|  | **Proposed Cloud-Edge DT** | **$0.3912 \pm 0.1429$** | **$0.3799 \pm 0.1024$** | **$161.25 \pm 13.95$** | **\$4.632 \pm 0.264** | **$1700.1 \pm 268.0$** | **0.00** | **Base** | **Base** |
-| **Mk05**<br>(15x4, 106 ops) | Rule-SPT-Fast | $0.1587 \pm 0.0504$ | $0.6874 \pm 0.0686$ | $377.60 \pm 20.43$ | \$19.270 \pm 0.987 | $4456.9 \pm 361.5$ | 17.13 | +0.96 | 0.0011 |
-|  | Rule-EET-Eco | $0.2303 \pm 0.0599$ | $0.5143 \pm 0.0721$ | $453.73 \pm 18.80$ | \$10.512 \pm 0.197 | $6619.3 \pm 355.2$ | 0.00 | +0.83 | 0.0017 |
-|  | Rule-EDD-Bal | $0.5623 \pm 0.0425$ | $0.3964 \pm 0.0120$ | $387.35 \pm 10.46$ | \$14.239 \pm 0.343 | $2829.1 \pm 82.3$ | 0.00 | -0.85 | 0.0011 |
-|  | Right-Shift Rescheduling | $0.5152 \pm 0.1031$ | $0.3594 \pm 0.0271$ | $376.46 \pm 31.23$ | \$12.230 \pm 0.934 | $4806.7 \pm 704.0$ | 0.00 | -0.42 | < 0.001 |
-|  | NSGA-II (Open-Loop) | $0.2084 \pm 0.0637$ | $0.5000 \pm 0.0796$ | $459.37 \pm 25.44$ | \$12.362 \pm 0.650 | $6215.3 \pm 664.6$ | 9.13 | +0.88 | < 0.001 |
-|  | MOEA-D (Open-Loop) | $0.1467 \pm 0.1102$ | $0.6280 \pm 0.1769$ | $470.79 \pm 46.37$ | \$12.719 \pm 1.261 | $6984.4 \pm 1206.9$ | 9.87 | +0.88 | < 0.001 |
-|  | RVEA (Open-Loop) | $0.1992 \pm 0.0785$ | $0.5499 \pm 0.0885$ | $446.88 \pm 25.00$ | \$16.178 \pm 0.840 | $5054.0 \pm 836.0$ | 12.67 | +0.88 | 0.0011 |
-|  | NSGA-III (Open-Loop) | $0.2318 \pm 0.1186$ | $0.5040 \pm 0.1217$ | $450.84 \pm 40.10$ | \$12.697 \pm 0.921 | $6100.4 \pm 983.7$ | 9.20 | +0.74 | 0.0011 |
-|  | Standalone Edge PPO | $0.4012 \pm 0.0891$ | $0.4569 \pm 0.0365$ | $344.81 \pm 25.02$ | \$15.457 \pm 0.502 | $4896.0 \pm 639.0$ | 4.73 | +0.16 | 0.5995 |
-|  | **Proposed Cloud-Edge DT** | **$0.4188 \pm 0.1046$** | **$0.3851 \pm 0.0683$** | **$408.76 \pm 29.48$** | **\$11.198 \pm 0.539** | **$5395.5 \pm 800.5$** | **0.00** | **Base** | **Base** |
+| **Mk01**<br>(10x6, 55 ops) | Rule-SPT-Fast | 0.0890 ± 0.0172 | 0.8353 ± 0.0425 | 116.22 ± 1.57 | &#36;3.127 ± 0.118 | 550.7 ± 27.2 | 4.80 | +1.00 | < 0.001 |
+|  | Rule-EET-Eco | 0.3441 ± 0.0263 | 0.4914 ± 0.0268 | 94.67 ± 2.49 | &#36;2.455 ± 0.043 | 424.1 ± 11.3 | 0.00 | +0.41 | 0.2768 |
+|  | Rule-EDD-Bal | 0.0396 ± 0.0227 | 1.0198 ± 0.1137 | 124.55 ± 8.38 | &#36;3.662 ± 0.070 | 544.3 ± 80.7 | 0.00 | +1.00 | < 0.001 |
+|  | Right-Shift Rescheduling | 0.4967 ± 0.1268 | 0.3527 ± 0.1052 | 81.17 ± 6.74 | &#36;2.546 ± 0.120 | 345.8 ± 99.4 | 0.00 | -0.40 | 0.2768 |
+|  | NSGA-II (Open-Loop) | 0.4845 ± 0.2341 | 0.3986 ± 0.2066 | 82.69 ± 11.90 | &#36;2.573 ± 0.199 | 365.4 ± 159.8 | 0.73 | -0.21 | 0.5537 |
+|  | MOEA-D (Open-Loop) | 0.5326 ± 0.1997 | 0.3439 ± 0.1478 | 79.77 ± 10.15 | &#36;2.606 ± 0.127 | 323.2 ± 128.2 | 0.80 | -0.38 | 0.3616 |
+|  | RVEA (Open-Loop) | 0.6183 ± 0.2444 | 0.3655 ± 0.1659 | 67.47 ± 10.34 | &#36;3.052 ± 0.368 | 184.0 ± 105.6 | 0.60 | -0.62 | 0.1293 |
+|  | NSGA-III (Open-Loop) | 0.4693 ± 0.1798 | 0.3952 ± 0.1517 | 83.64 ± 11.90 | &#36;2.570 ± 0.233 | 362.7 ± 101.7 | 0.87 | -0.21 | 0.5614 |
+|  | Standalone Edge PPO | 0.0548 ± 0.0179 | 0.9275 ± 0.0611 | 110.42 ± 3.77 | &#36;3.245 ± 0.136 | 673.6 ± 45.8 | 0.00 | +1.00 | < 0.001 |
+|  | **Proposed Cloud-Edge DT** | **0.4103 ± 0.1024** | **0.3948 ± 0.0989** | **86.00 ± 9.79** | **&#36;2.793 ± 0.183** | **330.0 ± 60.5** | **0.00** | **Base** | **Base** |
+| **Mk02**<br>(10x6, 58 ops) | Rule-SPT-Fast | 0.1294 ± 0.0761 | 0.8218 ± 0.1708 | 110.98 ± 16.66 | &#36;3.323 ± 0.173 | 513.5 ± 146.4 | 5.67 | +1.00 | < 0.001 |
+|  | Rule-EET-Eco | 0.1173 ± 0.0331 | 0.8174 ± 0.0485 | 98.73 ± 2.46 | &#36;1.962 ± 0.033 | 707.5 ± 33.2 | 0.00 | +1.00 | < 0.001 |
+|  | Rule-EDD-Bal | 0.1385 ± 0.0346 | 0.8148 ± 0.0631 | 85.69 ± 2.79 | &#36;4.311 ± 0.240 | 304.2 ± 17.2 | 0.00 | +1.00 | < 0.001 |
+|  | Right-Shift Rescheduling | 0.7429 ± 0.0997 | 0.2237 ± 0.0335 | 67.33 ± 7.12 | &#36;2.186 ± 0.205 | 179.0 ± 52.5 | 0.00 | -0.63 | 0.0043 |
+|  | NSGA-II (Open-Loop) | 0.6466 ± 0.1645 | 0.2767 ± 0.0982 | 69.11 ± 10.70 | &#36;2.172 ± 0.173 | 265.9 ± 102.0 | 0.60 | -0.28 | 0.7571 |
+|  | MOEA-D (Open-Loop) | 0.5733 ± 0.1908 | 0.3239 ± 0.0754 | 70.52 ± 10.39 | &#36;2.345 ± 0.271 | 294.8 ± 99.5 | 0.87 | +0.15 | 0.8904 |
+|  | RVEA (Open-Loop) | 0.7062 ± 0.2558 | 0.3603 ± 0.1097 | 54.86 ± 8.23 | &#36;2.846 ± 0.445 | 157.9 ± 97.8 | 0.80 | -0.23 | 0.7571 |
+|  | NSGA-III (Open-Loop) | 0.7691 ± 0.1572 | 0.2290 ± 0.0424 | 66.29 ± 9.09 | &#36;2.095 ± 0.162 | 188.2 ± 84.1 | 0.33 | -0.59 | 0.0269 |
+|  | Standalone Edge PPO | 0.1471 ± 0.1101 | 0.8160 ± 0.1898 | 99.79 ± 18.09 | &#36;3.399 ± 0.251 | 527.3 ± 207.5 | 0.53 | +0.98 | < 0.001 |
+|  | **Proposed Cloud-Edge DT** | **0.5828 ± 0.1517** | **0.3262 ± 0.0921** | **72.31 ± 10.53** | **&#36;2.466 ± 0.355** | **237.7 ± 110.6** | **0.00** | **Base** | **Base** |
+| **Mk03**<br>(15x8, 150 ops) | Rule-SPT-Fast | 0.2353 ± 0.0377 | 0.5716 ± 0.0489 | 547.20 ± 11.86 | &#36;17.007 ± 0.472 | 5394.7 ± 260.1 | 19.20 | +0.79 | 0.0051 |
+|  | Rule-EET-Eco | 0.4803 ± 0.1242 | 0.3858 ± 0.1013 | 512.67 ± 32.41 | &#36;13.323 ± 0.275 | 4542.0 ± 474.9 | 1.40 | +0.24 | 0.9084 |
+|  | Rule-EDD-Bal | 0.0755 ± 0.0443 | 0.9729 ± 0.0955 | 619.12 ± 48.85 | &#36;26.912 ± 0.867 | 3079.4 ± 433.4 | 4.87 | +1.00 | < 0.001 |
+|  | Right-Shift Rescheduling | 0.7707 ± 0.1161 | 0.2530 ± 0.0274 | 427.21 ± 24.54 | &#36;13.362 ± 0.555 | 3769.2 ± 587.4 | 0.00 | -0.62 | 0.0043 |
+|  | NSGA-II (Open-Loop) | 0.3583 ± 0.1276 | 0.4670 ± 0.1318 | 507.85 ± 47.47 | &#36;14.506 ± 0.677 | 5220.6 ± 644.7 | 10.07 | +0.52 | 0.0410 |
+|  | MOEA-D (Open-Loop) | 0.4295 ± 0.1877 | 0.4273 ± 0.1622 | 496.38 ± 44.33 | &#36;14.649 ± 0.390 | 4888.5 ± 1040.2 | 10.47 | +0.32 | 0.9084 |
+|  | RVEA (Open-Loop) | 0.5662 ± 0.1878 | 0.3457 ± 0.0981 | 445.82 ± 31.79 | &#36;15.346 ± 0.670 | 4280.2 ± 1047.0 | 12.00 | -0.00 | 0.9084 |
+|  | NSGA-III (Open-Loop) | 0.3453 ± 0.1147 | 0.4784 ± 0.1221 | 514.37 ± 25.12 | &#36;14.280 ± 0.517 | 5239.8 ± 815.4 | 9.67 | +0.57 | 0.0214 |
+|  | Standalone Edge PPO | 0.1001 ± 0.0454 | 0.8780 ± 0.0838 | 438.62 ± 44.32 | &#36;26.469 ± 1.338 | 5093.4 ± 591.9 | 6.27 | +1.00 | < 0.001 |
+|  | **Proposed Cloud-Edge DT** | **0.5477 ± 0.2102** | **0.3516 ± 0.1398** | **462.69 ± 45.99** | **&#36;13.883 ± 0.677** | **4621.8 ± 889.6** | **0.00** | **Base** | **Base** |
+| **Mk04**<br>(15x8, 90 ops) | Rule-SPT-Fast | 0.0652 ± 0.0240 | 0.8796 ± 0.0681 | 188.05 ± 10.17 | &#36;6.811 ± 0.127 | 1942.4 ± 97.4 | 8.53 | +1.00 | < 0.001 |
+|  | Rule-EET-Eco | 0.1464 ± 0.0270 | 0.6389 ± 0.0444 | 195.60 ± 4.47 | &#36;4.430 ± 0.141 | 2038.0 ± 49.3 | 0.00 | +0.96 | < 0.001 |
+|  | Rule-EDD-Bal | 0.0833 ± 0.0063 | 0.8581 ± 0.0156 | 196.24 ± 4.35 | &#36;6.740 ± 0.145 | 1414.7 ± 26.6 | 0.00 | +1.00 | < 0.001 |
+|  | Right-Shift Rescheduling | 0.5081 ± 0.1781 | 0.3273 ± 0.1262 | 152.40 ± 10.83 | &#36;4.547 ± 0.225 | 1546.9 ± 398.6 | 0.00 | -0.43 | 0.1508 |
+|  | NSGA-II (Open-Loop) | 0.3237 ± 0.1499 | 0.4472 ± 0.1483 | 168.22 ± 15.41 | &#36;4.542 ± 0.382 | 1840.5 ± 348.0 | 2.53 | +0.25 | 0.4280 |
+|  | MOEA-D (Open-Loop) | 0.4374 ± 0.2159 | 0.3926 ± 0.1857 | 162.66 ± 23.47 | &#36;4.660 ± 0.380 | 1596.2 ± 279.5 | 2.87 | -0.16 | 1.0000 |
+|  | RVEA (Open-Loop) | 0.4047 ± 0.2414 | 0.4824 ± 0.1735 | 157.56 ± 21.13 | &#36;5.319 ± 0.569 | 1508.7 ± 467.3 | 3.47 | -0.01 | 1.0000 |
+|  | NSGA-III (Open-Loop) | 0.3603 ± 0.1830 | 0.4257 ± 0.1386 | 166.18 ± 15.65 | &#36;4.462 ± 0.336 | 1784.7 ± 373.7 | 2.47 | +0.20 | 1.0000 |
+|  | Standalone Edge PPO | 0.1945 ± 0.1139 | 0.7371 ± 0.1331 | 151.79 ± 16.68 | &#36;6.835 ± 0.451 | 1476.8 ± 252.8 | 0.80 | +0.68 | 0.0037 |
+|  | **Proposed Cloud-Edge DT** | **0.3912 ± 0.1429** | **0.3799 ± 0.1024** | **161.25 ± 13.95** | **&#36;4.632 ± 0.264** | **1700.1 ± 268.0** | **0.00** | **Base** | **Base** |
+| **Mk05**<br>(15x4, 106 ops) | Rule-SPT-Fast | 0.1587 ± 0.0504 | 0.6874 ± 0.0686 | 377.60 ± 20.43 | &#36;19.270 ± 0.987 | 4456.9 ± 361.5 | 17.13 | +0.96 | 0.0011 |
+|  | Rule-EET-Eco | 0.2303 ± 0.0599 | 0.5143 ± 0.0721 | 453.73 ± 18.80 | &#36;10.512 ± 0.197 | 6619.3 ± 355.2 | 0.00 | +0.83 | 0.0017 |
+|  | Rule-EDD-Bal | 0.5623 ± 0.0425 | 0.3964 ± 0.0120 | 387.35 ± 10.46 | &#36;14.239 ± 0.343 | 2829.1 ± 82.3 | 0.00 | -0.85 | 0.0011 |
+|  | Right-Shift Rescheduling | 0.5152 ± 0.1031 | 0.3594 ± 0.0271 | 376.46 ± 31.23 | &#36;12.230 ± 0.934 | 4806.7 ± 704.0 | 0.00 | -0.42 | < 0.001 |
+|  | NSGA-II (Open-Loop) | 0.2084 ± 0.0637 | 0.5000 ± 0.0796 | 459.37 ± 25.44 | &#36;12.362 ± 0.650 | 6215.3 ± 664.6 | 9.13 | +0.88 | < 0.001 |
+|  | MOEA-D (Open-Loop) | 0.1467 ± 0.1102 | 0.6280 ± 0.1769 | 470.79 ± 46.37 | &#36;12.719 ± 1.261 | 6984.4 ± 1206.9 | 9.87 | +0.88 | < 0.001 |
+|  | RVEA (Open-Loop) | 0.1992 ± 0.0785 | 0.5499 ± 0.0885 | 446.88 ± 25.00 | &#36;16.178 ± 0.840 | 5054.0 ± 836.0 | 12.67 | +0.88 | 0.0011 |
+|  | NSGA-III (Open-Loop) | 0.2318 ± 0.1186 | 0.5040 ± 0.1217 | 450.84 ± 40.10 | &#36;12.697 ± 0.921 | 6100.4 ± 983.7 | 9.20 | +0.74 | 0.0011 |
+|  | Standalone Edge PPO | 0.4012 ± 0.0891 | 0.4569 ± 0.0365 | 344.81 ± 25.02 | &#36;15.457 ± 0.502 | 4896.0 ± 639.0 | 4.73 | +0.16 | 0.5995 |
+|  | **Proposed Cloud-Edge DT** | **0.4188 ± 0.1046** | **0.3851 ± 0.0683** | **408.76 ± 29.48** | **&#36;11.198 ± 0.539** | **5395.5 ± 800.5** | **0.00** | **Base** | **Base** |
+
+
+
+
+
 ### 3.3 Critical Examination of Baseline Behaviors
 
 #### 3.3.1 Honest Assessment of Right-Shift Rescheduling (Fair EKF-Equipped Baseline)
@@ -213,18 +218,23 @@ To isolate the exact physical contribution of each sub-system, four ablated arch
 ```
 Table 2: Ablation Study Results across 15 Independent Test Seeds on Mk01 and Mk03
 ```
-| Instance | Variant | Description | Makespan (min) | TOU Cost (\$) | TWT (min) | Breakdowns |
+| Instance | Variant | Description | Makespan (min) | TOU Cost (&#36;) | TWT (min) | Breakdowns |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: |
-| **Mk01**<br>(10x6, 55 ops) | **Full Proposed DT** | Full closed-loop framework (Dual-Sensor EKF + Speed Scaling + SSR Standby + Cloud Guidance) | **$86.00 \pm 9.79$ (Base)** | **\$2.793 \pm 0.183 (Base)** | **$329.99 \pm 60.47$ (Base)** | **0.00** |
-|  | Variant 1 | w/o Dual-Sensor Wear Feedback (Delayed PM under disturbance) | $84.20 \pm 9.27$ (-2.1%) | \$2.572 \pm 0.157$ (-7.9%) | $373.68 \pm 129.18$ (+13.2%) | **0.80** |
-|  | Variant 2 | Fixed Speed $s=2$ (No real-time dynamic TOU peak avoidance) | $79.34 \pm 6.61$ (-7.8%) | \$3.031 \pm 0.357$ (+8.5%) | $294.04 \pm 62.85$ (-10.9%) | 0.00 |
-|  | Variant 3 | Idle-Only (No SSR standby power gating during waiting intervals) | $85.09 \pm 8.56$ (-1.1%) | \$3.224 \pm 0.214$ (+15.4%) | $324.19 \pm 49.99$ (-1.8%) | 0.00 |
-|  | Variant 4 | w/o Cloud Guidance (Pure local edge dispatching without global macro prior) | $110.42 \pm 3.77$ (+28.4%) | \$3.245 \pm 0.136$ (+16.2%) | $673.57 \pm 45.85$ (+104.1%) | 0.00 |
-| **Mk03**<br>(15x8, 150 ops) | **Full Proposed DT** | Full closed-loop framework (Dual-Sensor EKF + Speed Scaling + SSR Standby + Cloud Guidance) | **$462.69 \pm 45.99$ (Base)** | **\$13.883 \pm 0.677 (Base)** | **$4621.78 \pm 889.63$ (Base)** | **0.00** |
-|  | Variant 1 | w/o Dual-Sensor Wear Feedback (Delayed PM under disturbance) | $511.54 \pm 29.06$ (+10.6%) | \$13.683 \pm 0.387$ (-1.4%) | $5226.80 \pm 801.80$ (+13.1%) | **7.60** |
-|  | Variant 2 | Fixed Speed $s=2$ (No real-time dynamic TOU peak avoidance) | $413.64 \pm 35.03$ (-10.6%) | \$14.133 \pm 0.969$ (+1.8%) | $3750.56 \pm 725.84$ (-18.9%) | 0.00 |
-|  | Variant 3 | Idle-Only (No SSR standby power gating during waiting intervals) | $442.95 \pm 33.98$ (-4.3%) | \$20.106 \pm 0.934$ (+44.8%) | $4275.74 \pm 682.96$ (-7.5%) | 0.00 |
-|  | Variant 4 | w/o Cloud Guidance (Pure local edge dispatching without global macro prior) | $438.62 \pm 44.32$ (-5.2%) | \$26.469 \pm 1.338$ (+90.7%) | $5093.45 \pm 591.89$ (+10.2%) | **6.27** |
+| **Mk01**<br>(10x6, 55 ops) | **Full Proposed DT** | Full closed-loop framework (Dual-Sensor EKF + Speed Scaling + SSR Standby + Cloud Guidance) | **86.00 ± 9.79 (Base)** | **&#36;2.793 ± 0.183 (Base)** | **329.99 ± 60.47 (Base)** | **0.00** |
+|  | Variant 1 | w/o Dual-Sensor Wear Feedback (Delayed PM under disturbance) | 84.20 ± 9.27 (-2.1%) | &#36;2.572 ± 0.157 (-7.9%) | 373.68 ± 129.18 (+13.2%) | **0.80** |
+|  | Variant 2 | Fixed Speed $s=2$ (No real-time dynamic TOU peak avoidance) | 79.34 ± 6.61 (-7.8%) | &#36;3.031 ± 0.357 (+8.5%) | 294.04 ± 62.85 (-10.9%) | 0.00 |
+|  | Variant 3 | Idle-Only (No SSR standby power gating during waiting intervals) | 85.09 ± 8.56 (-1.1%) | &#36;3.224 ± 0.214 (+15.4%) | 324.19 ± 49.99 (-1.8%) | 0.00 |
+|  | Variant 4 | w/o Cloud Guidance (Pure local edge dispatching without global macro prior) | 110.42 ± 3.77 (+28.4%) | &#36;3.245 ± 0.136 (+16.2%) | 673.57 ± 45.85 (+104.1%) | 0.00 |
+| **Mk03**<br>(15x8, 150 ops) | **Full Proposed DT** | Full closed-loop framework (Dual-Sensor EKF + Speed Scaling + SSR Standby + Cloud Guidance) | **462.69 ± 45.99 (Base)** | **&#36;13.883 ± 0.677 (Base)** | **4621.78 ± 889.63 (Base)** | **0.00** |
+|  | Variant 1 | w/o Dual-Sensor Wear Feedback (Delayed PM under disturbance) | 511.54 ± 29.06 (+10.6%) | &#36;13.683 ± 0.387 (-1.4%) | 5226.80 ± 801.80 (+13.1%) | **7.60** |
+|  | Variant 2 | Fixed Speed $s=2$ (No real-time dynamic TOU peak avoidance) | 413.64 ± 35.03 (-10.6%) | &#36;14.133 ± 0.969 (+1.8%) | 3750.56 ± 725.84 (-18.9%) | 0.00 |
+|  | Variant 3 | Idle-Only (No SSR standby power gating during waiting intervals) | 442.95 ± 33.98 (-4.3%) | &#36;20.106 ± 0.934 (+44.8%) | 4275.74 ± 682.96 (-7.5%) | 0.00 |
+|  | Variant 4 | w/o Cloud Guidance (Pure local edge dispatching without global macro prior) | 438.62 ± 44.32 (-5.2%) | &#36;26.469 ± 1.338 (+90.7%) | 5093.45 ± 591.89 (+10.2%) | **6.27** |
+
+
+
+
+
 ### 4.2 Analytical Findings from Ablation
 
 #### 4.2.1 Scale-Dependent Behavior of Variant 1 (The Blind Closed-Loop Hazard)
@@ -253,22 +263,23 @@ To determine the optimal synchronization boundary, the threshold $\theta_{\text{
 ```
 Table 3: Parametric CDI Threshold Sensitivity Evaluation across 10 Validation Seeds (Regime C)
 ```
-| CDI Threshold $\theta_{\text{th}}$ | Resync Calls ($\text{Mean} \pm \text{Std}$) | Makespan ($\text{Mean} \pm \text{Std}$) | TOU Cost (\$) | Max CDI ($\text{Mean} \pm \text{Std}$) | Schedule Index | Total System Cost Index | Operational Region |
-| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| **0.02** | $4.90 \pm 0.70$ | $64.85 \pm 3.43$ | \$2.901 \pm 0.107 | $0.1043 \pm 0.0123$ | 1.1529 | 1.0867 | Over-Triggering Region (> 2 Shocks) |
-| **0.05** | **$2.70 \pm 0.46$** | **$63.19 \pm 3.31$** | **\$2.796 \pm 0.099** | **$0.0846 \pm 0.0053$** | **1.1173** | **1.0325 (Empirical Optimum)** | **Over-Triggering Region (> 2 Shocks)** |
-| **0.08** | $1.90 \pm 0.30$ | $68.94 \pm 4.46$ | \$2.716 \pm 0.075 | $0.1009 \pm 0.0242$ | 1.1508 | 1.0547 | Event-Matched Plateau (1–2 Shocks) |
-| **0.10** | $1.50 \pm 0.50$ | $72.59 \pm 3.80$ | \$2.652 \pm 0.095 | $0.1287 \pm 0.0150$ | 1.1693 | 1.0674 | Event-Matched Plateau (1–2 Shocks) |
-| **0.12** | **$1.40 \pm 0.49$** | **$74.45 \pm 4.53$** | **\$2.647 \pm 0.099** | **$0.1373 \pm 0.0120$** | **1.1843** | **1.0799 (Selected Center)** | **Event-Matched Plateau (1–2 Shocks)** |
-| **0.15** | $1.00 \pm 0.00$ | $75.51 \pm 3.44$ | \$2.644 \pm 0.099 | $0.1759 \pm 0.0174$ | 1.1927 | 1.0834 | Event-Matched Plateau (1–2 Shocks) |
-| **0.18** | $1.00 \pm 0.00$ | $76.71 \pm 2.80$ | \$2.624 \pm 0.066 | $0.2078 \pm 0.0185$ | 1.1991 | 1.0892 | Event-Matched Plateau (1–2 Shocks) |
-| **0.22** | $0.90 \pm 0.30$ | $77.88 \pm 2.95$ | \$2.614 \pm 0.071 | $0.2369 \pm 0.0147$ | 1.2071 | 1.0954 | Under-Triggering Region (< 1 Shock) |
-| **0.35** | $0.00 \pm 0.00$ | $84.63 \pm 2.79$ | \$2.583 \pm 0.062 | $0.2623 \pm 0.0268$ | 1.2594 | 1.1334 | Under-Triggering Region (< 1 Shock) |
-| **0.50** | $0.00 \pm 0.00$ | $84.63 \pm 2.79$ | \$2.583 \pm 0.062 | $0.2623 \pm 0.0268$ | 1.2594 | 1.1334 | Under-Triggering Region (< 1 Shock) |
-As shown in Figure 4(b), thresholds are classified strictly by objective physical matching to the $N_{\text{shocks}} = 2.0$ macro-disturbances per shift:
-- **Over-Triggering Region (`> 2 Shocks`, $\text{calls} > 2.0$, $\theta_{\text{th}} \le 0.05$):** High sensitivity triggers $2.70 \pm 0.46$ to $4.90 \pm 0.70$ calls per shift ($7.25$–$13.15\,\text{s}$ Cloud Warm-Start solver overhead). While $\theta_{\text{th}}^* = 0.05$ minimizes the heuristic composite `Total_System_Cost_Index` ($1.0325$, $63.19\,\text{min}$, \$2.796), it does so by over-triggering beyond the 2 physical shocks.
-- **Event-Matched Plateau (`1–2 Shocks`, $1.0 \le \text{calls} \le 2.0$, $\theta_{\text{th}} \in [0.08, 0.18]$):** Resync calls track the physical macro-disturbance budget ($1.00$ to $1.90$ calls; $2.68$–$5.10\,\text{s}$ solver overhead). At $\theta_{\text{th}} = 0.08$, the index is $1.0547$ ($1.90 \pm 0.30$ calls, $68.94\,\text{min}$, \$2.716$); the frozen deployment center $\theta_{\text{th}} = 0.12$ executes $1.40 \pm 0.49$ calls ($74.45 \pm 4.53\,\text{min}$, TOU Cost \$2.647 $\pm$ 0.099$, `Total_System_Cost_Index` $= 1.0799$).
-- **Under-Triggering Region (`< 1 Shock`, $\text{calls} < 1.0$, $\theta_{\text{th}} \ge 0.22$):** Below-unity triggering misses macro-disturbances ($0.90 \to 0.00$ calls), degrading Makespan up to **$84.63 \pm 2.79\,\text{min}$** and raising `Total_System_Cost_Index` to $1.1334$.
+| CDI Threshold $\theta_{\text{th}}$ | Resync Calls (Mean ± Std) | Makespan (Mean ± Std, min) | TOU Cost (&#36;) | Energy (kWh) | Max CDI (Mean ± Std) | Schedule Composite Index | Total System Cost Index | Comm Overhead (s) |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **0.02** | 5.00 ± 0.63 | 65.35 ± 3.66 | &#36;2.904 ± 0.111 | 18.972 ± 0.369 | 0.1034 ± 0.0135 | 1.1581 | 1.0922 | 13.4183 |
+| **0.05** | **2.70 ± 0.46** | **63.15 ± 3.31** | **&#36;2.796 ± 0.095** | **18.549 ± 0.230** | **0.0845 ± 0.0053** | **1.1169** | **1.0322 (Empirical Optimum)** | **7.2459** |
+| **0.08** | 1.90 ± 0.30 | 68.93 ± 4.46 | &#36;2.716 ± 0.075 | 18.687 ± 0.225 | 0.1008 ± 0.0242 | 1.1506 | 1.0546 | 5.0990 |
+| **0.10** | 1.50 ± 0.50 | 72.68 ± 3.90 | &#36;2.650 ± 0.095 | 18.778 ± 0.284 | 0.1279 ± 0.0160 | 1.1695 | 1.0676 | 4.0255 |
+| **0.12** | **1.40 ± 0.49** | **74.45 ± 4.52** | **&#36;2.647 ± 0.100** | **18.809 ± 0.314** | **0.1373 ± 0.0120** | **1.1842** | **1.0798 (Deployed)** | **3.7571** |
+| **0.15** | 1.00 ± 0.00 | 75.51 ± 3.44 | &#36;2.643 ± 0.099 | 18.783 ± 0.302 | 0.1759 ± 0.0174 | 1.1925 | 1.0832 | 2.6837 |
+| **0.18** | 1.00 ± 0.00 | 76.71 ± 2.80 | &#36;2.623 ± 0.066 | 18.827 ± 0.160 | 0.2078 ± 0.0185 | 1.1990 | 1.0891 | 2.6837 |
+| **0.22** | 0.90 ± 0.30 | 77.87 ± 2.95 | &#36;2.613 ± 0.072 | 18.991 ± 0.136 | 0.2369 ± 0.0147 | 1.2069 | 1.0952 | 2.4153 |
+| **0.35** | 0.00 ± 0.00 | 84.63 ± 2.79 | &#36;2.583 ± 0.062 | 19.142 ± 0.190 | 0.2623 ± 0.0268 | 1.2594 | 1.1334 | 0.0000 |
+| **0.50** | 0.00 ± 0.00 | 84.63 ± 2.79 | &#36;2.583 ± 0.062 | 19.142 ± 0.190 | 0.2623 ± 0.0268 | 1.2594 | 1.1334 | 0.0000 |
+
+As shown in Figure 4(b), sweeping the threshold across $\theta_{\text{th}} \in [0.02, 0.50]$ traces a continuous Pareto trade-off between resynchronization frequency, schedule completion time, and TOU energy expenditure:
+- **Empirical Minimum Under Standard Weights ($\theta_{\text{th}}^* = 0.05$):** Under the weighted composite objective ($w_C = 0.45, w_E = 0.45, w_{\text{comm}} = 0.10$), `Total_System_Cost_Index` attains its global minimum of **$1.0322$** at $\theta_{\text{th}}^* = 0.05$ ($2.70 \pm 0.46$ Cloud Warm-Start calls, Makespan $63.15 \pm 3.31\,\text{min}$, TOU Cost &#36;2.796 ± 0.095, solver wait overhead $7.2459\,\text{s}$).
+- **Deployed Configuration ($\theta_{\text{th}} = 0.12$):** Choosing $\theta_{\text{th}} = 0.12$ prioritizes deeper Cloud server load reduction and TOU electricity cost savings relative to $\theta_{\text{th}}^* = 0.05$ (equivalent to higher communication/tariff weighting), lowering Cloud calls by **$48.1\%$** ($1.40 \pm 0.49$ vs. $2.70$ calls; solver wait $3.7571\,\text{s}$) and trimming TOU cost by **$5.3\%$** (&#36;2.647 ± 0.100 vs. &#36;2.796) while trading $+11.30\,\text{min}$ longer makespan ($74.45 \pm 4.52\,\text{min}$, `Total_System_Cost_Index` $= 1.0798$).
+- **High-Threshold Behavior ($\theta_{\text{th}} \ge 0.22$):** Raising the threshold further reduces synchronization toward zero ($0.90 \to 0.00$ calls), allowing Makespan to drift up to **$84.63 \pm 2.79\,\text{min}$** and elevating `Total_System_Cost_Index` to $1.1334$.
 
 ### 4.4 Inter-Workstation Transport Latency Sensitivity Analysis
 In automated discrete manufacturing facilities, automated guided vehicles (AGVs) or overhead conveyors introduce non-zero transport delays between consecutive machine operations. To investigate the robustness of the collaborative architecture against material handling latency, we systematically varied inter-workstation transport time $\tau_{\text{trans}} \in [0.0, 1.0, 2.0, 3.0]\,\text{min}$ across both small (`Mk01`) and large (`Mk03`) instances under 15 independent test seeds ($n=15$ runs per cell):
@@ -276,40 +287,46 @@ In automated discrete manufacturing facilities, automated guided vehicles (AGVs)
 ```
 Table 4: Parametric Transport Latency Sensitivity Evaluation across 15 Test Seeds (Mk01 & Mk03)
 ```
-| Instance | Transport Latency $\tau_{\text{trans}}$ | Method | Makespan (min) $\downarrow$ | TOU Cost (\$) $\downarrow$ | Tardiness TWT (min) $\downarrow$ | Tool Failures $\downarrow$ |
+| Instance | Transport Latency $\tau_{\text{trans}}$ | Method | Makespan (min) $\downarrow$ | TOU Cost (&#36;) $\downarrow$ | Tardiness TWT (min) $\downarrow$ | Tool Failures $\downarrow$ |
 | :--- | :---: | :--- | :---: | :---: | :---: | :---: |
-| **Mk01** | 0.0 min | NSGA-III (Open-Loop) | $83.64 \pm 11.90$ | \$2.570 \pm 0.233 | $362.7 \pm 101.7$ | **0.87** |
-|  |  | Right-Shift Rescheduling | $81.17 \pm 6.74$ | \$2.546 \pm 0.120 | $345.8 \pm 99.4$ | 0.00 |
-|  |  | Standalone Edge PPO | $110.42 \pm 3.77$ | \$3.245 \pm 0.136 | $673.6 \pm 45.9$ | 0.00 |
-|  |  | **Proposed Cloud-Edge DT** | **$86.00 \pm 9.79$** | **\$2.793 \pm 0.183** | **$330.0 \pm 60.5$** | **0.00** |
-|  | 1.0 min | NSGA-III (Open-Loop) | $93.70 \pm 11.95$ | \$2.549 \pm 0.194 | $457.7 \pm 113.2$ | **0.87** |
-|  |  | Right-Shift Rescheduling | $93.24 \pm 8.22$ | \$2.529 \pm 0.097 | $468.4 \pm 121.0$ | 0.00 |
-|  |  | Standalone Edge PPO | $127.27 \pm 4.58$ | \$3.184 \pm 0.134 | $878.3 \pm 56.1$ | 0.00 |
-|  |  | **Proposed Cloud-Edge DT** | **$98.12 \pm 12.15$** | **\$2.830 \pm 0.218** | **$437.0 \pm 64.8$** | **0.00** |
-|  | 2.0 min | NSGA-III (Open-Loop) | $104.69 \pm 12.39$ | \$2.566 \pm 0.182 | $570.7 \pm 126.7$ | **0.87** |
-|  |  | Right-Shift Rescheduling | $105.85 \pm 9.48$ | \$2.462 \pm 0.098 | $601.1 \pm 139.1$ | 0.00 |
-|  |  | Standalone Edge PPO | $143.61 \pm 5.12$ | \$3.107 \pm 0.104 | $1070.7 \pm 55.7$ | 0.00 |
-|  |  | **Proposed Cloud-Edge DT** | **$117.77 \pm 14.31$** | **\$2.813 \pm 0.172** | **$606.4 \pm 147.9$** | **0.00** |
-|  | 3.0 min | NSGA-III (Open-Loop) | $116.87 \pm 13.58$ | \$2.542 \pm 0.165 | $697.8 \pm 140.9$ | **0.87** |
-|  |  | Right-Shift Rescheduling | $119.25 \pm 10.65$ | \$2.414 \pm 0.121 | $746.0 \pm 156.2$ | 0.00 |
-|  |  | Standalone Edge PPO | $159.54 \pm 5.55$ | \$3.196 \pm 0.102 | $1265.6 \pm 60.6$ | 0.00 |
-|  |  | **Proposed Cloud-Edge DT** | **$130.24 \pm 18.73$** | **\$2.937 \pm 0.162** | **$764.1 \pm 135.2$** | **0.00** |
-| **Mk03** | 0.0 min | NSGA-III (Open-Loop) | $514.37 \pm 25.12$ | \$14.280 \pm 0.517 | $5239.8 \pm 815.4$ | **9.67** |
-|  |  | Right-Shift Rescheduling | $427.21 \pm 24.54$ | \$13.362 \pm 0.555 | $3769.2 \pm 587.4$ | 0.00 |
-|  |  | Standalone Edge PPO | $438.62 \pm 44.32$ | \$26.469 \pm 1.338 | $5093.4 \pm 591.9$ | **6.27** |
-|  |  | **Proposed Cloud-Edge DT** | **$462.69 \pm 45.99$** | **\$13.883 \pm 0.677** | **$4621.8 \pm 889.6$** | **0.00** |
-|  | 1.0 min | NSGA-III (Open-Loop) | $550.77 \pm 28.69$ | \$14.257 \pm 0.638 | $5839.3 \pm 831.7$ | **9.67** |
-|  |  | Right-Shift Rescheduling | $464.69 \pm 30.80$ | \$13.951 \pm 0.486 | $4401.1 \pm 626.4$ | 0.00 |
-|  |  | Standalone Edge PPO | $466.56 \pm 49.07$ | \$26.117 \pm 1.703 | $5443.4 \pm 770.6$ | **6.73** |
-|  |  | **Proposed Cloud-Edge DT** | **$474.54 \pm 28.76$** | **\$14.189 \pm 0.776** | **$4943.6 \pm 698.1$** | **0.00** |
-|  | 2.0 min | NSGA-III (Open-Loop) | $589.88 \pm 32.56$ | \$14.257 \pm 0.750 | $6498.9 \pm 850.1$ | **9.67** |
-|  |  | Right-Shift Rescheduling | $503.85 \pm 37.93$ | \$13.873 \pm 0.370 | $5072.7 \pm 693.8$ | 0.00 |
-|  |  | Standalone Edge PPO | $473.42 \pm 44.68$ | \$25.390 \pm 1.185 | $5035.0 \pm 661.9$ | **6.20** |
-|  |  | **Proposed Cloud-Edge DT** | **$507.72 \pm 39.07$** | **\$14.373 \pm 0.710** | **$5615.4 \pm 992.9$** | **0.00** |
-|  | 3.0 min | NSGA-III (Open-Loop) | $630.07 \pm 37.35$ | \$14.214 \pm 0.849 | $7185.8 \pm 891.6$ | **9.67** |
-|  |  | Right-Shift Rescheduling | $545.00 \pm 44.39$ | \$13.988 \pm 0.395 | $5780.4 \pm 782.7$ | 0.00 |
-|  |  | Standalone Edge PPO | $483.63 \pm 34.62$ | \$25.007 \pm 1.036 | $5152.9 \pm 700.1$ | **5.60** |
-|  |  | **Proposed Cloud-Edge DT** | **$525.40 \pm 43.53$** | **\$14.688 \pm 0.859** | **$5760.5 \pm 810.6$** | **0.00** |
+| **Mk01** | 0.0 min | NSGA-III (Open-Loop) | 83.64 ± 11.90 | &#36;2.570 ± 0.233 | 362.7 ± 101.7 | **0.87** |
+|  |  | Right-Shift Rescheduling | 81.17 ± 6.74 | &#36;2.546 ± 0.120 | 345.8 ± 99.4 | 0.00 |
+|  |  | Standalone Edge PPO | 110.42 ± 3.77 | &#36;3.245 ± 0.136 | 673.6 ± 45.9 | 0.00 |
+|  |  | **Proposed Cloud-Edge DT** | **86.00 ± 9.79** | **&#36;2.793 ± 0.183** | **330.0 ± 60.5** | **0.00** |
+|  | 1.0 min | NSGA-III (Open-Loop) | 93.70 ± 11.95 | &#36;2.549 ± 0.194 | 457.7 ± 113.2 | **0.87** |
+|  |  | Right-Shift Rescheduling | 93.24 ± 8.22 | &#36;2.529 ± 0.097 | 468.4 ± 121.0 | 0.00 |
+|  |  | Standalone Edge PPO | 127.27 ± 4.58 | &#36;3.184 ± 0.134 | 878.3 ± 56.1 | 0.00 |
+|  |  | **Proposed Cloud-Edge DT** | **98.12 ± 12.15** | **&#36;2.830 ± 0.218** | **437.0 ± 64.8** | **0.00** |
+|  | 2.0 min | NSGA-III (Open-Loop) | 104.69 ± 12.39 | &#36;2.566 ± 0.182 | 570.7 ± 126.7 | **0.87** |
+|  |  | Right-Shift Rescheduling | 105.85 ± 9.48 | &#36;2.462 ± 0.098 | 601.1 ± 139.1 | 0.00 |
+|  |  | Standalone Edge PPO | 143.61 ± 5.12 | &#36;3.107 ± 0.104 | 1070.7 ± 55.7 | 0.00 |
+|  |  | **Proposed Cloud-Edge DT** | **117.77 ± 14.31** | **&#36;2.813 ± 0.172** | **606.4 ± 147.9** | **0.00** |
+|  | 3.0 min | NSGA-III (Open-Loop) | 116.87 ± 13.58 | &#36;2.542 ± 0.165 | 697.8 ± 140.9 | **0.87** |
+|  |  | Right-Shift Rescheduling | 119.25 ± 10.65 | &#36;2.414 ± 0.121 | 746.0 ± 156.2 | 0.00 |
+|  |  | Standalone Edge PPO | 159.54 ± 5.55 | &#36;3.196 ± 0.102 | 1265.6 ± 60.6 | 0.00 |
+|  |  | **Proposed Cloud-Edge DT** | **130.24 ± 18.73** | **&#36;2.937 ± 0.162** | **764.1 ± 135.2** | **0.00** |
+| **Mk03** | 0.0 min | NSGA-III (Open-Loop) | 514.37 ± 25.12 | &#36;14.280 ± 0.517 | 5239.8 ± 815.4 | **9.67** |
+|  |  | Right-Shift Rescheduling | 427.21 ± 24.54 | &#36;13.362 ± 0.555 | 3769.2 ± 587.4 | 0.00 |
+|  |  | Standalone Edge PPO | 438.62 ± 44.32 | &#36;26.469 ± 1.338 | 5093.4 ± 591.9 | **6.27** |
+|  |  | **Proposed Cloud-Edge DT** | **462.69 ± 45.99** | **&#36;13.883 ± 0.677** | **4621.8 ± 889.6** | **0.00** |
+|  | 1.0 min | NSGA-III (Open-Loop) | 550.77 ± 28.69 | &#36;14.257 ± 0.638 | 5839.3 ± 831.7 | **9.67** |
+|  |  | Right-Shift Rescheduling | 464.69 ± 30.80 | &#36;13.951 ± 0.486 | 4401.1 ± 626.4 | 0.00 |
+|  |  | Standalone Edge PPO | 466.56 ± 49.07 | &#36;26.117 ± 1.703 | 5443.4 ± 770.6 | **6.73** |
+|  |  | **Proposed Cloud-Edge DT** | **474.54 ± 28.76** | **&#36;14.189 ± 0.776** | **4943.6 ± 698.1** | **0.00** |
+|  | 2.0 min | NSGA-III (Open-Loop) | 589.88 ± 32.56 | &#36;14.257 ± 0.750 | 6498.9 ± 850.1 | **9.67** |
+|  |  | Right-Shift Rescheduling | 503.85 ± 37.93 | &#36;13.873 ± 0.370 | 5072.7 ± 693.8 | 0.00 |
+|  |  | Standalone Edge PPO | 473.42 ± 44.68 | &#36;25.390 ± 1.185 | 5035.0 ± 661.9 | **6.20** |
+|  |  | **Proposed Cloud-Edge DT** | **507.72 ± 39.07** | **&#36;14.373 ± 0.710** | **5615.4 ± 992.9** | **0.00** |
+|  | 3.0 min | NSGA-III (Open-Loop) | 630.07 ± 37.35 | &#36;14.214 ± 0.849 | 7185.8 ± 891.6 | **9.67** |
+|  |  | Right-Shift Rescheduling | 545.00 ± 44.39 | &#36;13.988 ± 0.395 | 5780.4 ± 782.7 | 0.00 |
+|  |  | Standalone Edge PPO | 483.63 ± 34.62 | &#36;25.007 ± 1.036 | 5152.9 ± 700.1 | **5.60** |
+|  |  | **Proposed Cloud-Edge DT** | **525.40 ± 43.53** | **&#36;14.688 ± 0.859** | **5760.5 ± 810.6** | **0.00** |
+
+
+
+
+
+
 #### Key Findings from Transport Sensitivity:
 1. **Strict Boundary Consistency at $\tau_{\text{trans}} = 0.0$:**  
    At zero transport delay ($\tau_{\text{trans}} = 0.0\,\text{min}$), all reported Mean and Std metrics for Makespan, TOU Cost, TWT, and Tool Breakdowns match the corresponding benchmark entries in Table 1 identically (error $< 10^{-4}$), verifying experimental protocol rigor.
@@ -321,49 +338,49 @@ Table 4: Parametric Transport Latency Sensitivity Evaluation across 15 Test Seed
 ---
 
 
-### 4.5 Closed-Loop Multi-Tier Latency & Five-Mode HIL Evaluation (incl. Frequency-Matched Periodic Control)
-To isolate **(A) Live EKF Wear Feedback**, **(B) Call-Frequency Reduction**, and **(C) Event-Triggered Timing vs. Blind Periodic Timing**, we execute a 5-mode HIL evaluation across 15 independent test seeds (`TEST_SEEDS = [301..315]`, Brandimarte `Mk01` physical twin, 55 operations) after freezing $\theta_{\text{th}} = 0.12$ within the validation Event-Matched Plateau $[0.08, 0.18]$ (`VAL_SEEDS = [201..210]`). All 5 modes share identical TOU-aware speed logic (preserving multi-objective planned speed off/mid-peak and derating to $s=1$ inside On-Peak $\text{rate} \ge 0.20$), TOU-cost-aware resync scoring, and statistically principled EKF wear projection ($w_{\text{proj}} = \hat{w} + \Delta w_{\text{nom}} + 2\sigma_{\text{EKF}} + 2.0$), while billing each Cloud Warm-Start Resynchronization invocation at its empirical latency (`cloud_nsga3_resync_solve_s = 2.6835 s` + `2 * 0.0814 ms` MQTT RTT):
+### 4.5 Closed-Loop Multi-Tier Latency & Five-Mode HIL Evaluation (In-Loop Cloud Wait & Frequency-Matched Periodic Control)
+To isolate **(A) Live EKF Wear Feedback**, **(B) Call-Frequency Reduction**, and **(C) Event-Triggered Timing vs. Blind Periodic Timing**, we execute a 5-mode HIL evaluation across 15 independent test seeds (`TEST_SEEDS = [301..315]`, Brandimarte `Mk01` physical twin, 55 operations) at deployed threshold $\theta_{\text{th}} = 0.12$ (`VAL_SEEDS = [201..210]` Pareto trade-off analysis). All 5 modes share identical TOU-aware speed logic (preserving multi-objective planned speed off/mid-peak and derating to $s=1$ inside On-Peak $\text{rate} \ge 0.20$), TOU-cost-aware resync scoring, and statistically principled EKF wear projection ($w_{\text{proj}} = \hat{w} + \Delta w_{\text{nom}} + 2\sigma_{\text{EKF}} + 2.0$). Each Cloud Warm-Start Resynchronization call incurs its empirical latency (`cloud_nsga3_resync_solve_s = 2.6835 s` + `2 * 0.0814 ms` MQTT RTT) **directly inside the discrete-event simulation loop** (advancing machine clocks and accumulating IDLE TOU energy/cost during resynchronization):
 - **Mode 1 (`Periodic High-Freq + No EKF`, Every 5 ops):** $10.00$ blind periodic calls using cumulative nominal wear tracking (`nominal_wear_um`, no EKF sensors).
-- **Mode 2 (`Periodic High-Freq + Live EKF`, Every 5 ops):** $10.00$ periodic calls ($26.8366\,\text{s}$ total Cloud Warm-Start solver delay) paired with Live EKF.
-- **Mode 3 (`Periodic Frequency-Matched + Live EKF`, Op 25 & Op 50):** Fixed low-frequency periodic calls matched to $N_{\text{shocks}} = 2.0$ ($2.00$ calls, $5.3673\,\text{s}$ solver delay) at fixed milestones regardless of true shock timing (`Op 19..22`, `Op 37..40`).
+- **Mode 2 (`Periodic High-Freq + Live EKF`, Every 5 ops):** $10.00$ periodic calls ($26.8366\,\text{s}$ total in-loop Cloud Warm-Start wait) paired with Live EKF.
+- **Mode 3 (`Periodic Frequency-Matched + Live EKF`, Op 25 & Op 50):** Fixed low-frequency periodic calls ($2.00$ calls, $5.3673\,\text{s}$ in-loop wait) at fixed milestones regardless of true shock timing (`Op 19..22`, `Op 37..40`).
 - **Mode 4 (`One-Shot Autonomous + Live EKF`, 0 calls):** Edge EKF + ONNX policy only, without online Cloud re-synchronization.
 - **Mode 5 (`Proposed Event-Triggered CDI + Live EKF`, $\theta_{\text{th}} = 0.12$):** Invokes Cloud Warm-Start Resynchronization immediately when $\text{CDI}(t) > 0.12$.
 
 ```
 Table 5: Quantitative Comparison of Five Modes in Closed-Loop HIL Simulation (55 Operations, Mk01 Physical Twin, Mean ± Std & Paired Wilcoxon vs. Mode 5 across TEST_SEEDS = [301..315])
 ```
-| Operational Mode | Resync Calls ($\text{Mean} \pm \text{Std}$) | Call Reduction (%) | Cloud Warm-Start Overhead ($\text{Mean} \pm \text{Std}$) | Edge Latency (ms) | Network Packets | Makespan ($\text{Mean} \pm \text{Std}$, min) | Energy ($\text{Mean} \pm \text{Std}$, kWh) | TOU Cost ($\text{Mean} \pm \text{Std}$, \$) | Max CDI ($\text{Mean} \pm \text{Std}$) | Final CDI ($\text{Mean} \pm \text{Std}$) | PM ($\text{Mean} \pm \text{Std}$) | Breakdowns ($\text{Mean} \pm \text{Std}$) | $p_{\text{Wilcoxon}}$ ($C_{\max}$) | $p_{\text{Wilcoxon}}$ (Cost) |
+| Operational Mode | Resync Calls (Mean ± Std) | Call Reduction (%) | Cloud Warm-Start Overhead (Mean ± Std) | Edge Latency (ms) | Network Packets | Makespan (Mean ± Std, min) | Energy (Mean ± Std, kWh) | TOU Cost (Mean ± Std, &#36;) | Max CDI (Mean ± Std) | Final CDI (Mean ± Std) | PM (Mean ± Std) | Breakdowns (Mean ± Std) | $p_{\text{Wilcoxon}}$ ($C_{\max}$) | $p_{\text{Wilcoxon}}$ (Cost) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| Mode 1: Periodic High-Freq + No EKF (Every 5 ops) | 10.00 ± 0.00 | 0.0% | 26.8366 ± 0.0000 s | — | 220.00 | 61.74 ± 1.98 | 18.856 ± 0.175 | \$2.874 ± 0.078 | 0.0768 ± 0.0040 | 0.0109 ± 0.0004 | 5.00 ± 0.00 | 0.00 ± 0.00 | < 0.0001 | < 0.0001 |
-| Mode 2: Periodic High-Freq + Live EKF (Every 5 ops) | 10.00 ± 0.00 | 0.0% | 26.8366 ± 0.0000 s | 0.0132 ms | 220.00 | 68.28 ± 4.76 | 19.120 ± 0.406 | \$2.862 ± 0.199 | 0.0797 ± 0.0028 | 0.0266 ± 0.0153 | 6.13 ± 0.72 | 0.00 ± 0.00 | 0.0730 | 0.0067 |
-| Mode 3: Periodic Frequency-Matched + Live EKF (Op 25, 50) | 2.00 ± 0.00 | 80.0% | 5.3673 ± 0.0000 s | 0.0132 ms | 204.00 | 73.42 ± 4.58 | 18.769 ± 0.216 | \$2.617 ± 0.105 | 0.1335 ± 0.0119 | 0.0193 ± 0.0111 | 5.67 ± 0.47 | 0.00 ± 0.00 | 0.3809 | 1.0000 |
-| Mode 4: One-Shot Autonomous + Live EKF (No Re-sync) | 0.00 ± 0.00 | 100.0% | 0.0 s | 0.0132 ms | 200.00 | 84.53 ± 3.23 | 19.074 ± 0.270 | \$2.578 ± 0.070 | 0.2593 ± 0.0334 | 0.2593 ± 0.0334 | 5.67 ± 0.47 | 0.00 ± 0.00 | 0.0007 | 0.0833 |
-| **Mode 5: Proposed Event-Triggered CDI + Live EKF (CDI=0.12)** | **1.27 ± 0.44** | **87.3%** | **3.3993 ± 1.1868 s** | 0.0132 ms | **202.53** | **72.22 ± 5.01** | **18.809 ± 0.227** | **\$2.619 ± 0.113** | 0.1345 ± 0.0105 | 0.0640 ± 0.0371 | 5.73 ± 0.44 | **0.00 ± 0.00** | **Base** | **Base** |
+| Mode 1: Periodic High-Freq + No EKF (Every 5 ops) | 10.00 ± 0.00 | 0.0% | 26.8366 ± 0.0000 s | — | 220.00 | 61.68 ± 1.98 | 18.932 ± 0.176 | &#36;2.891 ± 0.076 | 0.0765 ± 0.0040 | 0.0110 ± 0.0004 | 5.00 ± 0.00 | 0.00 ± 0.00 | < 0.0001 | < 0.0001 |
+| Mode 2: Periodic High-Freq + Live EKF (Every 5 ops) | 10.00 ± 0.00 | 0.0% | 26.8366 ± 0.0000 s | 0.0132 ms | 220.00 | 67.00 ± 5.98 | 19.050 ± 0.363 | &#36;2.813 ± 0.130 | 0.0796 ± 0.0033 | 0.0199 ± 0.0149 | 6.13 ± 0.72 | 0.00 ± 0.00 | 0.0479 | 0.0067 |
+| Mode 3: Periodic Frequency-Matched + Live EKF (Op 25, 50) | 2.00 ± 0.00 | 80.0% | 5.3673 ± 0.0000 s | 0.0132 ms | 204.00 | 73.41 ± 4.58 | 18.769 ± 0.239 | &#36;2.614 ± 0.102 | 0.1335 ± 0.0120 | 0.0190 ± 0.0112 | 5.67 ± 0.47 | 0.00 ± 0.00 | 0.4303 | 0.9780 |
+| Mode 4: One-Shot Autonomous + Live EKF (No Re-sync) | 0.00 ± 0.00 | 100.0% | 0.0 s | 0.0132 ms | 200.00 | 84.53 ± 3.23 | 19.074 ± 0.270 | &#36;2.578 ± 0.070 | 0.2593 ± 0.0334 | 0.2593 ± 0.0334 | 5.67 ± 0.47 | 0.00 ± 0.00 | 0.0007 | 0.0637 |
+| **Mode 5: Proposed Event-Triggered CDI + Live EKF (CDI=0.12)** | **1.27 ± 0.44** | **87.3%** | **3.3993 ± 1.1868 s** | 0.0132 ms | **202.53** | **72.22 ± 5.01** | **18.816 ± 0.228** | **&#36;2.620 ± 0.113** | 0.1345 ± 0.0105 | 0.0640 ± 0.0371 | 5.73 ± 0.44 | **0.00 ± 0.00** | **Base** | **Base** |
 
-#### Multi-Tier Latency Hierarchy & Cloud Warm-Start Overhead:
+#### Multi-Tier Latency Hierarchy & Honest Single-Cell vs. Multi-Cell Benefit:
 Empirical benchmarking on a Linux x86_64 workstation (Python 3.12, ONNX Runtime CPUExecutionProvider) confirms the multi-tier timing distribution:
 1. **Edge ONNX Forward Pass:** $0.0132\,\text{ms}$ ($13.2\,\mu\text{s}$, $\sim 75,500$ inferences/second).
 2. **Local MQTT Transport RTT:** $0.0814\,\text{ms}$ (industrial LAN broker loopback).
 3. **Edge Decision Step:** $0.1506\,\text{ms}$ (full feature extraction, action masking, and ONNX prediction).
 4. **Online List Surrogate (`fast_heuristic_resync`):** $0.2143\,\text{ms}$ (simulation-engine surrogate assignment).
 5. **Edge Shift Computation:** $7.955\,\text{ms}$ (entire 55-step shift simulation on Mk01; $22.71\,\text{ms}$ on Mk03).
-6. **Cloud Warm-Start NSGA-III Resync (Billed in HIL):** $2.6835\,\text{s}$ per trigger ($26.84\,\text{s}$ cumulative for 10 periodic calls).
+6. **Cloud Warm-Start NSGA-III Resync (In-Loop Wait):** $2.6835\,\text{s}$ per trigger ($26.84\,\text{s}$ cumulative for 10 periodic calls).
 7. **Cloud NSGA-III Full Solve (Offline Baseline):** $4.2392\,\text{s}$ ($4.24 \pm 0.03\,\text{s}$ on Mk01; $14.97\,\text{s}$ on Mk03).
 
-This establishes a clear multi-dimensional latency hierarchy: per-decision edge reactivity ($0.1506\,\text{ms}$) is $\sim 28,147\times$ ($\sim 2.81 \times 10^4\times$) faster than a full Cloud NSGA-III solve ($4.2392\,\text{s}$) and $\sim 17,818\times$ faster than a Cloud Warm-Start NSGA-III resync ($2.6835\,\text{s}$), explaining why high-frequency periodic Cloud calls ($10 \times 2.6835\,\text{s} = 26.84\,\text{s}$) create severe solver queuing bottlenecks.
+Note honestly that on single-cell `Mk01` scale ($2.6835\,\text{s}$ per trigger), cutting Cloud calls from $10.00$ to $1.27$ saves $\sim 23.4\,\text{s}$ of wait overhead, whose direct share of a $\sim 67\,\text{min}$ shift makespan is small ($\sim 0.58\%$). Thus, the primary motivations for CDI event-triggering over high-frequency periodic resynchronization are **(i) multi-cell Cloud server scalability** (eliminating $87.3\%$ of concurrent solver load across factory cells), **(ii) reduced schedule nervousness** (fewer mid-shift machine reassignments), and **(iii) lower TOU electricity cost** relative to blind high-frequency periodic resync.
 
 #### Component & Timing Attribution (Figure 3):
-- **Value of Event-Triggered Timing over Frequency-Matched Periodic (`Mode 3` vs. `Mode 5`):** Both modes use identical Live EKF and PM rules, and **Mode 3** is explicitly tuned to the exact shock count ($2.00$ calls at Op 25 and Op 50, $5.3673\,\text{s}$ overhead). Yet because fixed milestones miss the random shock instants (`Op 19..22`, `Op 37..40`) and trigger needlessly at Op 50 even after benign shifts, **Mode 5** reduces Cloud Warm-Start calls by an additional **36.5%** ($1.27 \pm 0.44$ vs. $2.00$, cutting solver overhead from $5.37\,\text{s}$ to $3.40 \pm 1.19\,\text{s}$) while achieving slightly shorter mean makespan ($72.22 \pm 5.01$ vs. $73.42 \pm 4.58\,\text{min}$, $p = 0.3809$) and virtually identical TOU cost (\$2.619 vs. \$2.617, $p = 1.0000$).
-- **Isolating CDI Event-Triggering vs. High-Frequency Periodic (`Mode 2` vs. `Mode 5`):** Replacing 10-call periodic resync (**Mode 2**, $26.84\,\text{s}$ solver overhead) with **Mode 5** slashes synchronization calls and Warm-Start solver delay by **87.3%** ($3.40\,\text{s}$ vs. $26.84\,\text{s}$), significantly reduces TOU electricity cost by **$8.5%** (\$2.619 ± 0.113 vs. \$2.862 ± 0.199, $p = 0.0067$), with no statistically significant makespan penalty ($72.22$ vs. $68.28\,\text{min}$, $p = 0.0730$).
-- **Isolating Bounded Resync vs. Zero Resync (`Mode 4` vs. `Mode 5`):** Operating purely autonomously without Cloud re-synchronization (**Mode 4**, $0.00$ calls) accumulates unmitigated drift ($\text{CDI}_{\max} = 0.2593 \pm 0.0334$) that inflates makespan to $84.53 \pm 3.23\,\text{min}$. Adding just $1.27 \pm 0.44$ CDI-triggered calls in **Mode 5** recovers **$12.31\,\text{min}$** of makespan ($p = 0.0007$) at no statistically significant TOU cost difference (\$2.619 vs. \$2.578, $p = 0.0833$).
-- **Sensorless PM Blindness (`Mode 1` vs. `Mode 2`/`Mode 5`):** Without live EKF, **Mode 1** executes rigid schedule-only PM ($\text{PM} = 5.00 \pm 0.00$ vs. $6.13 \pm 0.72$ in Mode 2 and $5.73 \pm 0.44$ in Mode 5), ignoring $+26\,\mu\text{m}$ shock spikes and incurring $+\$0.255$/shift higher TOU cost than Mode 5 ($p = < 0.0001$).
+- **Event-Triggered vs. Frequency-Matched Periodic (`Mode 5` vs. `Mode 3`):** Both modes use identical Live EKF and PM rules, with **Mode 3** issuing $2.00$ calls at Op 25 and Op 50 ($5.3673\,\text{s}$ wait). **Mode 5** reduces Cloud Warm-Start calls by **36.5%** ($1.27 \pm 0.44$ vs. $2.00$, $3.3993 \pm 1.1868\,\text{s}$ wait), while **Makespan and TOU Cost show no statistically significant difference** between Mode 5 and Mode 3 (Makespan: $72.22 \pm 5.01$ vs. $73.41 \pm 4.58\,\text{min}$, $p = 0.4303$; TOU Cost: &#36;2.620 ± 0.113 vs. &#36;2.614 ± 0.102, $p = 0.9780$).
+- **Cost vs. Makespan Trade-Off Relative to High-Frequency Periodic (`Mode 5` vs. `Mode 2` & `Mode 1`):** Replacing 10-call periodic resync (**Mode 2**, $26.8366\,\text{s}$ wait) with **Mode 5** cuts Cloud calls by **87.3%** and significantly reduces TOU electricity cost by **6.9%** (&#36;2.620 ± 0.113 vs. &#36;2.813 ± 0.130, $p = 0.0067$), while incurring **+7.8%** longer makespan than Mode 2 ($72.22$ vs. $67.00\,\text{min}$, $p = 0.0479$) and **+17.1%** longer makespan than Mode 1 ($72.22$ vs. $61.68\,\text{min}$, $p < 0.0001$) because frequent global re-optimization tightens machine packing at higher energy cost.
+- **Bounded Resync vs. Zero Resync (`Mode 5` vs. `Mode 4`):** Operating purely autonomously without Cloud re-synchronization (**Mode 4**, $0.00$ calls) accumulates unmitigated drift ($\text{CDI}_{\max} = 0.2593 \pm 0.0334$) that inflates makespan to $84.53 \pm 3.23\,\text{min}$. Adding $1.27 \pm 0.44$ CDI-triggered calls in **Mode 5** recovers **$12.31\,\text{min}$** of makespan ($p = 0.0007$) at no statistically significant TOU cost difference (&#36;2.620 vs. &#36;2.578, $p = 0.0637$).
+- **Sensorless PM Blindness (`Mode 1` vs. `Mode 2`/`Mode 5`):** Without live EKF, **Mode 1** executes rigid schedule-only PM ($\text{PM} = 5.00 \pm 0.00$ vs. $6.13 \pm 0.72$ in Mode 2 and $5.73 \pm 0.44$ in Mode 5), ignoring $+26\,\mu\text{m}$ shock spikes and incurring $+&#36;0.271$/shift higher TOU cost than Mode 5 ($p < 0.0001$).
 
 ---
 
 ## 5. Mechatronic Hardware-in-the-Loop Telemetry & Physical Limits
 
 ### 5.1 Quantitative Telemetry Across 8 Operational Segments
-The physical testbed comprises an ESP32 microcontroller, an INA226 current/power sensor ($10\,\text{m}\Omega$ / $0.010\,\Omega$ shunt), an ADXL345 3-axis accelerometer configured in **Full-Resolution $\pm 16g$ mode (`0x31 = 0x0B`, $3.9\,\text{mg/LSB}$)** at **$200\,\text{Hz}$** sampling rate ($100\,\text{Hz}$ Nyquist bandwidth capturing low-frequency structural vibration energy and sub-100 Hz amplitude modulation), opto-isolated solid-state relays on `GPIO 25` and `GPIO 26` protected by **external $10\,\text{k}\Omega$ pull-down resistors to `GND`** (paired with internal boot pull-down enable), and an **Open-Drain (`OUTPUT_OPEN_DRAIN`, internal $3.3\,\text{V}$ pull-up disabled via `gpio_pullup_dis`) hardware brake output `GPIO 27` (`PIN_GRBL_FEED_HOLD`)** (High-Z normal, active `LOW` brake) to prevent $3.3\,\text{V}$/$5\,\text{V}$ voltage-level conflicts: for **Arduino Uno + CNC Shield V3 ($5\,\text{V}$ logic)**, `GPIO 27` connects through an isolating optocoupler (`PC817`) or N-channel MOSFET (`2N7000`) open-drain stage to `Feed Hold (A1)`; for **Makerbase MKS DLC32 ($3.3\,\text{V}$ ESP32 running Grbl_ESP32 / FluidNC)**, it connects to the `Hold` pin on the input header (`I36 / GPIO 36`). During transient I2C bus errors within the 3-sample debounce window ($1 \le \text{i2c\_err\_cnt} < 3$, spanning $15\,\text{ms}$ at $200\,\text{Hz}$), the firmware applies a Zero-Order Hold (ZOH) on filtered estimates and explicitly flags `"sample_held": true` in the $10\,\text{Hz}$ JSON packet. If an unrecovered fault persists (`i2c_consecutive_errors >= 3`, latching `fault_latched = true`), **Stop Category 1 two-phase hardware shutdown** executes immediately: (1) ESP32 pulls `GPIO 27` `LOW` in $< 1\,\text{ms}$ to halt X/Y/Z axis motion via hardware `Feed Hold`, keeping `PIN_SSR_MAIN` active so the spindle does not stall mid-cut during deceleration; concurrently, `GRBLHardwareController.emergency_stop()` transmits serial `Feed Hold (!)` and polls `?` every $50\,\text{ms}$ up to the synchronized kinematic deceleration timeout `compute_decel_timeout_s(1000.0, 10.0, 0.833) = (1000/60)/10 + 0.833 = 2.50\,\text{s}` (matching firmware `SPINDLE_DECEL_WAIT_MS = 2500\,\text{ms}` from GRBL `$110 = 1000\,\text{mm/min}` and `$120 = 10\,\text{mm/s}^2$) until GRBL confirms `Hold:0` (`Idle` or `feed <= 1e-3`); (2) only after verified axis stop (or the $2500\,\text{ms}$ / $2.50\,\text{s}$ kinematic fallback) does the controller dispatch `CMD:OFF` to open SSRs followed by `Soft Reset (0x18)`. Furthermore, if the ESP32 loses power, resets, or hangs, `EdgeDigitalTwinNode.check_telemetry_watchdog()` enforces a **$300\,\text{ms}$ Host Telemetry Heartbeat Watchdog** (3 missed $10\,\text{Hz}$ frames or `TimeoutError`/`ConnectionError`) that immediately calls `grbl.emergency_stop()` (`!`) directly over Serial.
+The physical testbed comprises an ESP32 microcontroller, an INA226 current/power sensor ($10\,\text{m}\Omega$ / $0.010\,\Omega$ shunt), an ADXL345 3-axis accelerometer configured in **Full-Resolution $\pm 16g$ mode (`0x31 = 0x0B`, $3.9\,\text{mg/LSB}$)** at **$200\,\text{Hz}$** sampling rate ($100\,\text{Hz}$ Nyquist bandwidth capturing low-frequency structural vibration energy and sub-100 Hz amplitude modulation), opto-isolated solid-state relays on `GPIO 25` and `GPIO 26` protected by **external $10\,\text{k}\Omega$ pull-down resistors to `GND`** (paired with internal boot pull-down enable), and an **Open-Drain (`OUTPUT_OPEN_DRAIN`, internal $3.3\,\text{V}$ pull-up disabled via `gpio_pullup_dis`) hardware brake output `GPIO 27` (`PIN_GRBL_FEED_HOLD`)** (High-Z normal, active `LOW` brake) to prevent $3.3\,\text{V}$/$5\,\text{V}$ voltage-level conflicts: for **Arduino Uno + CNC Shield V3 ($5\,\text{V}$ logic)**, `GPIO 27` connects through an isolating optocoupler (`PC817`) or N-channel MOSFET (`2N7000`) open-drain stage to `Feed Hold (A1)`; for **Makerbase MKS DLC32 ($3.3\,\text{V}$ ESP32 running Grbl_ESP32 / FluidNC)**, it connects to the `Hold` pin on the input header (`I36 / GPIO 36`). During transient I2C bus errors within the 3-sample debounce window ($1 \le \text{i2c\_err\_cnt} < 3$, spanning $15\,\text{ms}$ at $200\,\text{Hz}$), the firmware applies a Zero-Order Hold (ZOH) on filtered estimates and explicitly flags `"sample_held": true` in the $10\,\text{Hz}$ JSON packet. If an unrecovered fault persists (`i2c_consecutive_errors >= 3`, latching `fault_latched = true`), **Stop Category 1 two-phase hardware shutdown** executes immediately: (1) ESP32 pulls `GPIO 27` `LOW` in $< 1\,\text{ms}$ to halt X/Y/Z axis motion via hardware `Feed Hold`, keeping `PIN_SSR_MAIN` active so the spindle does not stall mid-cut during deceleration; concurrently, `GRBLHardwareController.emergency_stop()` transmits serial `Feed Hold (!)` and polls `?` every $50\,\text{ms}$ up to the synchronized kinematic deceleration timeout `compute_decel_timeout_s(...)` (dynamically synced via GRBL `$$` `$110–$112`/`$120–$122` and `CMD:SET_DECEL_MS:<ms>`, defaulting to `2500 ms` / `2.50 s` from `$110 = 1000 mm/min` and `$120 = 10 mm/s²`) until GRBL confirms `Hold:0` (`Idle` or `feed <= 1e-3`); (2) only after verified axis stop (or the $2500\,\text{ms}$ / $2.50\,\text{s}$ kinematic fallback) does the controller dispatch `CMD:OFF` to open SSRs followed by `Soft Reset (0x18)`. Furthermore, if the ESP32 loses power, resets, or hangs, `EdgeDigitalTwinNode.check_telemetry_watchdog()` enforces a **$300\,\text{ms}$ Host Telemetry Heartbeat Watchdog** (3 missed $10\,\text{Hz}$ frames or `TimeoutError`/`ConnectionError`) that immediately calls `grbl.emergency_stop()` (`!`) directly over Serial. Furthermore, if the ESP32 loses power, resets, or hangs, `EdgeDigitalTwinNode.check_telemetry_watchdog()` enforces a **$300\,\text{ms}$ Host Telemetry Heartbeat Watchdog** (3 missed $10\,\text{Hz}$ frames or `TimeoutError`/`ConnectionError`) that immediately calls `grbl.emergency_stop()` (`!`) directly over Serial. Furthermore, if the ESP32 loses power, resets, or hangs, `EdgeDigitalTwinNode.check_telemetry_watchdog()` enforces a **$300\,\text{ms}$ Host Telemetry Heartbeat Watchdog** (3 missed $10\,\text{Hz}$ frames or `TimeoutError`/`ConnectionError`) that immediately calls `grbl.emergency_stop()` (`!`) directly over Serial.
 
 Automated analysis of the continuous 60-second telemetry stream (`phase3_hardware_telemetry.csv`) yields eight distinct operational phases:
 1. **`[0.0 - 4.9 s]` (OFF State):** Quiescent baseline ($0.0\,\text{V}, 0.0\,\text{A}, 0.0\,\text{W}$, carryover wear $30.0\,\mu\text{m}$).
@@ -384,4 +401,4 @@ While the physical breadboard proves the mathematical validity of the Kalman-fil
 ---
 
 ## 6. Conclusion
-This study has presented a closed-loop Cloud-Edge Collaborative Digital Twin framework for dynamic green flexible job shop scheduling under cutting tool wear degradation and cyclic TOU electricity tariffs. By synthesizing global macro-optimization (NSGA-III, mean $\overline{\text{HV}} = 0.4702$ and $\overline{\text{IGD}} = 0.3675$ across Mk01–Mk05) with scale-invariant sub-millisecond edge neural dispatching (MaskablePPO ONNX: $0.0132\,\text{ms}$ forward pass, $0.1506\,\text{ms}$ decision step) via a shift-normalized Cumulative Disturbance Index (frozen at $\theta_{\text{th}} = 0.12$ within the objective Event-Matched Plateau $[0.08, 0.18]$ anchored to $N_{\text{shocks}} = 2.0$, whereas $\theta_{\text{th}}^* = 0.05$ minimizes the heuristic composite `Total_System_Cost_Index` by over-triggering), the framework eliminates all tool breakdowns ($0.00$ across Mk01–Mk05 and all transport latency tiers, compared to $0.33 - 12.67$ breakdowns for open-loop metaheuristics), reduces Cloud Warm-Start NSGA-III resynchronization calls by $87.3\%$ vs. high-frequency periodic resync ($1.27 \pm 0.44$ vs. $10.00$ calls, cutting solver delay from $26.84\,\text{s}$ to $3.40\,\text{s}$) and by $36.5\%$ vs. frequency-matched periodic control ($2.00$ calls), reduces TOU electricity costs by up to $30.95\%$ via SSR standby gating (saving $\$6.223$ per shift on Mk03 vs. idle-only; or $+44.82\%$ penalty if omitted), and saves $8.44\%$ TOU electricity cost on bottleneck Mk05 relative to fair EKF-equipped Right-Shift Rescheduling under verified Stop Category 1 hardware safety interlocks (`GPIO 27` Open-Drain Feed Hold, $2500\,\text{ms}$/$2.50\,\text{s}$ kinematic deceleration sync, and $300\,\text{ms}$ Host Watchdog).
+This study has presented a closed-loop Cloud-Edge Collaborative Digital Twin framework for dynamic green flexible job shop scheduling under cutting tool wear degradation and cyclic TOU electricity tariffs. By synthesizing global macro-optimization (NSGA-III, mean $\overline{\text{HV}} = 0.4702$ and $\overline{\text{IGD}} = 0.3675$ across Mk01–Mk05) with scale-invariant sub-millisecond edge neural dispatching (MaskablePPO ONNX: $0.0132\,\text{ms}$ forward pass, $0.1506\,\text{ms}$ decision step) via a shift-normalized Cumulative Disturbance Index exploring the continuous Pareto trade-off over $\theta_{\text{th}} \in [0.02, 0.50]$ (where $\theta_{\text{th}}^* = 0.05$ minimizes the weighted `Total_System_Cost_Index` $= 1.0322$, while deployment at $\theta_{\text{th}} = 0.12$ prioritizes Cloud-load and TOU cost reduction with $-48.1\%$ fewer calls and $-5.3\%$ lower TOU cost on validation seeds), the framework eliminates catastrophic tool failures compared to open-loop metaheuristics ($0.00$ vs. $0.33 - 12.67$) and standalone edge PPO ($0.00$ vs. $0.53 - 6.27$), matching the $0.00$ failure rate of EKF-equipped Right-Shift Rescheduling. In 5-mode HIL closed-loop testing with in-loop Cloud Warm-Start latency ($2.6835\,\text{s}$/call), CDI-triggered control (Mode 5) reduces Cloud calls by $87.3\%$ vs. high-frequency periodic EKF resync (Mode 2: $1.27 \pm 0.44$ vs. $10.00$ calls) and lowers TOU cost by $6.9\%$ ($p = 0.0067$) while trading $+7.8\%$ longer makespan vs. Mode 2 ($p = 0.0479$) and $+17.1\%$ vs. Mode 1 ($p < 0.0001$), primarily improving multi-cell Cloud server scalability and reducing schedule nervousness. Compared to frequency-matched periodic control at Op 25/50 (Mode 3: $2.00$ calls), Mode 5 cuts Cloud calls by $36.5\%$ with no statistically significant difference in Makespan ($p = 0.4303$) or TOU cost ($p = 0.9780$). Across multi-instance benchmarks, SSR standby gating reduces TOU electricity costs by up to $30.95\%$ (saving $\$6.223$ per shift on Mk03 vs. idle-only; or $+44.82\%$ penalty if omitted). Relative to fair EKF-equipped Right-Shift Rescheduling, two-sided paired Wilcoxon tests show no statistically significant difference in Hypervolume on Mk01 ($p_{\text{holm}} = 0.2768$) and Mk04 ($p_{\text{holm}} = 0.1508$), whereas Right-Shift achieves statistically higher Hypervolume on Mk02 ($p_{\text{holm}} = 0.0043$), Mk03 ($p_{\text{holm}} = 0.0043$), and Mk05 ($p_{\text{holm}} = 0.0005$) by preserving fixed topology without peak throttling, while Proposed DT saves $8.44\%$ TOU electricity cost on bottleneck Mk05 (\$11.198 vs. \$12.230) under Stop Category 1 hardware safety interlocks (`GPIO 27` Open-Drain Feed Hold, dynamic GRBL `$$` `$110–$112`/`$120–$122` deceleration sync via `CMD:SET_DECEL_MS`, and continuous $10\,\text{Hz}$ / $300\,\text{ms}$ Host Watchdog).

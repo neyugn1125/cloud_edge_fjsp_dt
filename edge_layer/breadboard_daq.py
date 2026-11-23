@@ -163,6 +163,7 @@ class BreadboardDAQInterface:
         self.skipped_lines_count: int = 0
         self.sensor_fault_count: int = 0
         self.last_ack: Optional[Dict[str, Any]] = None
+        self.spindle_decel_wait_ms: int = 2500
 
         self._filter = SimpleKalmanFilter1D(mea_e=4.0, est_e=4.0, q=0.20)
         self._filter.reset(self.p_idle_w)
@@ -199,7 +200,23 @@ class BreadboardDAQInterface:
 
         # Hardware Emulator Mode
         if cmd_clean.startswith("CMD:"):
-            target_state = cmd_clean[4:].upper()
+            raw_sub = cmd_clean[4:]
+            target_state = raw_sub.upper()
+            if target_state.startswith("SET_DECEL_MS:"):
+                try:
+                    val_ms = int(raw_sub.split(":", 1)[1].strip())
+                    if val_ms > 0:
+                        clamped_ms = max(500, min(15000, val_ms))
+                        self.spindle_decel_wait_ms = clamped_ms
+                        self.last_ack = {
+                            "ack": "CMD:SET_DECEL_MS",
+                            "decel_wait_ms": clamped_ms,
+                            "status": "OK",
+                        }
+                        return True
+                except ValueError:
+                    return False
+                return False
             if target_state == "RESET_FAULT":
                 return True
             if target_state in {"IDLE", "STANDBY", "OFF", "CUTTING"}:

@@ -27,7 +27,7 @@
  * - Power Filtering: SimpleKalmanFilter1D (3-tap Median + 1D Kalman Filter)
  * - Vibration Calculation: 20-sample sliding window RMS (100 ms window)
  * - Telemetry Output: 10 Hz (100 ms interval) via UART (115200 bps)
- * - Serial Commands: CMD:IDLE, CMD:STANDBY, CMD:OFF, CMD:CUTTING, CMD:RESET_FAULT
+ * - Serial Commands: CMD:IDLE, CMD:STANDBY, CMD:OFF, CMD:CUTTING, CMD:RESET_FAULT, CMD:SET_DECEL_MS:<ms>
  * ============================================================================
  */
 
@@ -36,6 +36,7 @@
 #include <ArduinoJson.h>
 #include <driver/gpio.h>
 #include <math.h>
+#include <stdlib.h>
 
 // ----------------------------------------------------------------------------
 // Pin Configurations & Constants
@@ -45,11 +46,10 @@
 #define PIN_SSR_STANDBY       25
 #define PIN_SSR_MAIN          26
 #define PIN_GRBL_FEED_HOLD     27      // GRBL Feed Hold (Open-Drain: High-Z = normal, LOW = emergency brake)
-#define GRBL_MAX_RATE_MM_MIN   1000.0f // GRBL $110 max rate (mm/min)
-#define GRBL_ACCEL_MM_S2       10.0f   // GRBL $120 acceleration (mm/s^2)
-#define DECEL_SAFETY_MARGIN_MS 833     // Safety margin (ms)
-// Kinematic worst-case deceleration time: (1000 / 60) / 10 = 1.667 s + 0.833 s margin = 2500 ms
-#define SPINDLE_DECEL_WAIT_MS  ((uint32_t)((((GRBL_MAX_RATE_MM_MIN / 60.0f) / GRBL_ACCEL_MM_S2) * 1000.0f) + 0.5f) + DECEL_SAFETY_MARGIN_MS)
+#define SPINDLE_DECEL_MIN_MS   500     // Minimum clamped spindle deceleration wait (ms)
+#define SPINDLE_DECEL_MAX_MS   15000   // Maximum clamped spindle deceleration wait (ms)
+// Default safe deceleration wait (2500 ms), dynamically updated at runtime via CMD:SET_DECEL_MS:<ms> from GRBL $$
+uint32_t spindle_decel_wait_ms = 2500;
 
 #define INA226_I2C_ADDR     0x40
 #define ADXL345_I2C_ADDR    0x53
@@ -476,7 +476,7 @@ char serial_rx_buf[64];
 uint8_t serial_rx_idx = 0;
 
 void processCommand(const char* cmd) {
-    // Expected format: CMD:IDLE, CMD:STANDBY, CMD:OFF, CMD:CUTTING, CMD:RESET_FAULT
+    // Expected format: CMD:IDLE, CMD:STANDBY, CMD:OFF, CMD:CUTTING, CMD:RESET_FAULT, CMD:SET_DECEL_MS:<ms>
     if (strncmp(cmd, "CMD:", 4) == 0) {
         const char* sub = cmd + 4;
         if (strcmp(sub, "RESET_FAULT") == 0) {
@@ -505,6 +505,22 @@ void processCommand(const char* cmd) {
             fault_decel_active = false;
             applySSRState(STATE_OFF);
             Serial.println("{\"ack\": \"CMD:OFF\", \"status\": \"OK\"}");
+        } else if (strncmp(sub, "SET_DECEL_MS:", 13) == 0) {
+            const char* val_str = sub + 13;
+            char* endptr = nullptr;
+            long parsed_ms = strtol(val_str, &endptr, 10);
+            if (endptr != val_str && parsed_ms > 0) {
+                if (parsed_ms < SPINDLE_DECEL_MIN_MS) {
+                    parsed_ms = SPINDLE_DECEL_MIN_MS;
+                } else if (parsed_ms > SPINDLE_DECEL_MAX_MS) {
+                    parsed_ms = SPINDLE_DECEL_MAX_MS;
+                }
+                spindle_decel_wait_ms = (uint32_t)parsed_ms;
+                Serial.printf("{\"ack\": \"CMD:SET_DECEL_MS\", \"decel_wait_ms\": %lu, \"status\": \"OK\"}\n",
+                              (unsigned long)spindle_decel_wait_ms);
+            } else {
+                Serial.printf("{\"error\": \"INVALID_DECEL_MS\", \"cmd\": \"%s\"}\n", cmd);
+            }
         } else if (fault_latched) {
             if (!fault_decel_active) {
                 applySSRState(STATE_OFF);
@@ -608,7 +624,7 @@ void loop() {
             digitalWrite(PIN_GRBL_FEED_HOLD, LOW);
             if (fault_decel_active) {
                 // Stop Category 1 Phase 2: cut SSR after safe axis deceleration window
-                if (millis() - fault_decel_start_ms >= SPINDLE_DECEL_WAIT_MS) {
+                if (millis() - fault_decel_start_ms >= spindle_decel_wait_ms) {
                     fault_decel_active = false;
                     applySSRState(STATE_OFF);
                 }
@@ -730,6 +746,7 @@ void loop() {
         doc["i2c_err_cnt"] = i2c_consecutive_errors;
         doc["sample_held"] = (i2c_consecutive_errors > 0 && !fault_latched);
         doc["feed_hold_pin_active"] = (digitalRead(PIN_GRBL_FEED_HOLD) == LOW);
+        doc["decel_wait_ms"] = spindle_decel_wait_ms;
         doc["sim_fallback"] = (!latest_sensor_ok && (ALLOW_SIM_FALLBACK != 0));
 
         serializeJson(doc, Serial);

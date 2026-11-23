@@ -170,7 +170,7 @@ $$\text{Nếu } CDI(k) > \theta_{\text{th}} \quad \Longrightarrow \quad \text{Ph
 
 Lưới khảo sát độ nhạy ngưỡng $\theta_{\text{th}}$ gồm 10 mốc:
 $$\theta_{\text{th}} \in [0.02, 0.05, 0.08, 0.10, 0.12, 0.15, 0.18, 0.22, 0.35, 0.50]$$
-- Ngưỡng triển khai chọn $\theta_{\text{th}} = 0.12$ (nằm trong vùng `Event-Matched Plateau (1–2 Shocks)` $[0.08, 0.18]$ bám sát đúng $N_{\text{shocks}} = 2.0$; cực tiểu chỉ số hợp thành `Total_System_Cost_Index` $= 1.0325$ rơi tại $\theta_{\text{th}} = 0.05$ thuộc vùng `Over-Triggering Region (> 2 Shocks)` với $2.70$ calls).
+- Đường cong đánh đổi Pareto liên tục ($\theta_{\text{th}} \in [0.02, 0.50]$): ngưỡng tối ưu theo hàm mục tiêu trọng số $(0.45, 0.45, 0.10)$ đạt `Total_System_Cost_Index` $= 1.0322$ tại $\theta_{\text{th}}^* = 0.05$ ($2.70$ calls); ngưỡng triển khai $\theta_{\text{th}} = 0.12$ ưu tiên giảm sâu số lần gọi Cloud ($1.40$ calls) và chi phí TOU (\$2.647, `Total_System_Cost_Index` $= 1.0798$) theo trọng số phạt truyền thông/chi phí cao hơn.
 
 ### 3.3 Cơ Chế Đánh Giá Tương Đối & Reset Điểm Neo (Relative Re-anchoring Mechanism)
 Để khắc phục triệt để hiện tượng kẹt kích hoạt liên tục (chatter re-triggering) sau một biến cố lớn giữa ca, hệ thống áp dụng cơ chế đánh giá gia số tương đối so với mốc đồng bộ gần nhất (`anchor_op_idx`):

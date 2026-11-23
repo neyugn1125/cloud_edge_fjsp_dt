@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -23,6 +24,57 @@ except ImportError:
     serial = None
 
 logger = logging.getLogger("GRBLHardwareController")
+
+
+def _compute_decel_timeout_impl(
+    max_rate_mm_min: Union[float, Dict[str, float]] = 1000.0,
+    accel_mm_s2: Union[float, Dict[str, float]] = 10.0,
+    margin_s: float = 0.85,
+) -> float:
+    """Compute worst-case kinematic deceleration time from max rapid rate(s) and accel(s)."""
+    if isinstance(max_rate_mm_min, dict) and isinstance(accel_mm_s2, dict):
+        axes = [ax for ax in ("X", "Y", "Z") if ax in max_rate_mm_min and ax in accel_mm_s2]
+        if not axes:
+            axes = list(max_rate_mm_min.keys())
+        if not axes:
+            raise ValueError("Axis rate/acceleration dicts cannot be empty.")
+        axis_times: List[float] = []
+        for ax in axes:
+            acc = float(accel_mm_s2[ax])
+            if acc <= 0.0:
+                raise ValueError(f"accel_mm_s2[{ax}] must be positive, got {acc}")
+            axis_times.append((float(max_rate_mm_min[ax]) / 60.0) / acc)
+        return max(axis_times) + float(margin_s)
+
+    acc_scalar = float(accel_mm_s2)
+    if acc_scalar <= 0.0:
+        raise ValueError(f"accel_mm_s2 must be positive, got {acc_scalar}")
+    return (float(max_rate_mm_min) / 60.0) / acc_scalar + float(margin_s)
+
+
+class _HybridDecelMethod:
+    """Descriptor allowing compute_decel_timeout_s on both class and instance."""
+
+    def __get__(self, instance: Optional["GRBLHardwareController"], owner: Any = None):
+        if instance is None:
+            return _compute_decel_timeout_impl
+
+        def _bound_compute(
+            max_rate_mm_min: Optional[Union[float, Dict[str, float]]] = None,
+            accel_mm_s2: Optional[Union[float, Dict[str, float]]] = None,
+            margin_s: float = 0.85,
+        ) -> float:
+            if max_rate_mm_min is None and accel_mm_s2 is None:
+                return _compute_decel_timeout_impl(
+                    instance.grbl_max_rates,
+                    instance.grbl_accels,
+                    margin_s=margin_s,
+                )
+            rate_arg = instance.grbl_max_rate_mm_min if max_rate_mm_min is None else max_rate_mm_min
+            accel_arg = instance.grbl_accel_mm_s2 if accel_mm_s2 is None else accel_mm_s2
+            return _compute_decel_timeout_impl(rate_arg, accel_arg, margin_s=margin_s)
+
+        return _bound_compute
 
 
 class GRBLHardwareController:
@@ -88,7 +140,10 @@ class GRBLHardwareController:
         self.esp32_interface = esp32_interface
         self.grbl_max_rate_mm_min: float = float(grbl_max_rate_mm_min)
         self.grbl_accel_mm_s2: float = float(grbl_accel_mm_s2)
+        self.grbl_max_rates: Dict[str, float] = {"X": 2500.0, "Y": 2500.0, "Z": 1000.0}
+        self.grbl_accels: Dict[str, float] = {"X": 50.0, "Y": 50.0, "Z": 25.0}
 
+        self.serial_lock = threading.RLock()
         self.serial_conn: Optional[Any] = None
         self.is_connected: bool = False
 
@@ -130,28 +185,103 @@ class GRBLHardwareController:
         if serial is None:
             raise ImportError("pyserial package is required for 'real_serial' mode.")
 
-        try:
-            self.serial_conn = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
-            time.sleep(2.0)  # Wait for GRBL Arduino bootloader reset
-            self.serial_conn.reset_input_buffer()
-            # Send newline wake-up
-            self.serial_conn.write(b"\r\n\r\n")
-            time.sleep(0.5)
-            self.serial_conn.reset_input_buffer()
-            self.is_connected = True
-            logger.info(f"Connected to GRBL controller on {self.port} at {self.baudrate} baud.")
-            return True
-        except Exception as e:
-            self.is_connected = False
-            logger.error(f"Failed to connect to GRBL controller on {self.port}: {e}")
-            raise ConnectionError(f"GRBL serial connection failed on {self.port}: {e}")
+        with self.serial_lock:
+            try:
+                self.serial_conn = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
+                time.sleep(2.0)  # Wait for GRBL Arduino bootloader reset
+                self.serial_conn.reset_input_buffer()
+                # Send newline wake-up
+                self.serial_conn.write(b"\r\n\r\n")
+                time.sleep(0.5)
+                self.serial_conn.reset_input_buffer()
+                self.is_connected = True
+                logger.info(f"Connected to GRBL controller on {self.port} at {self.baudrate} baud.")
+                self.sync_decel_timeout_to_esp32()
+                return True
+            except Exception as e:
+                self.is_connected = False
+                logger.error(f"Failed to connect to GRBL controller on {self.port}: {e}")
+                raise ConnectionError(f"GRBL serial connection failed on {self.port}: {e}")
 
     def disconnect(self) -> None:
         """Close serial connection."""
-        if self.serial_conn is not None and getattr(self.serial_conn, "is_open", False):
-            self.serial_conn.close()
-        self.is_connected = False
+        with self.serial_lock:
+            if self.serial_conn is not None and getattr(self.serial_conn, "is_open", False):
+                self.serial_conn.close()
+            self.is_connected = False
         logger.info("GRBL controller disconnected.")
+
+    def read_grbl_settings(self) -> Dict[str, float]:
+        """
+        Query GRBL $$ settings ($110-$112 max rate mm/min and $120-$122 accel mm/s^2)
+        and update internal axis kinematic limits.
+        """
+        rate_map = {"110": "X", "111": "Y", "112": "Z"}
+        accel_map = {"120": "X", "121": "Y", "122": "Z"}
+        settings: Dict[str, float] = {
+            "$110": self.grbl_max_rates["X"],
+            "$111": self.grbl_max_rates["Y"],
+            "$112": self.grbl_max_rates["Z"],
+            "$120": self.grbl_accels["X"],
+            "$121": self.grbl_accels["Y"],
+            "$122": self.grbl_accels["Z"],
+        }
+
+        if self.mode == "real_serial" and self.serial_conn is not None:
+            with self.serial_lock:
+                self.serial_conn.write(b"$$\n")
+                if hasattr(self.serial_conn, "flush"):
+                    self.serial_conn.flush()
+
+                for _ in range(50):
+                    raw_bytes = self.serial_conn.readline()
+                    if raw_bytes == b"" or raw_bytes == "":
+                        break
+                    if isinstance(raw_bytes, (bytes, bytearray)):
+                        line = raw_bytes.decode("utf-8", errors="ignore").strip()
+                    else:
+                        line = str(raw_bytes).strip()
+                    if not line:
+                        continue
+                    if line.lower() == "ok":
+                        break
+
+                    match = re.match(r"^\$(\d+)=([0-9.]+)", line)
+                    if match:
+                        code, val_str = match.group(1), match.group(2)
+                        val = float(val_str)
+                        settings[f"${code}"] = val
+                        if code in rate_map:
+                            self.grbl_max_rates[rate_map[code]] = val
+                        elif code in accel_map:
+                            self.grbl_accels[accel_map[code]] = val
+
+                self.grbl_max_rate_mm_min = self.grbl_max_rates["X"]
+                self.grbl_accel_mm_s2 = self.grbl_accels["X"]
+
+        return settings
+
+    def sync_decel_timeout_to_esp32(self) -> int:
+        """
+        Read GRBL $$ kinematic parameters ($110-$112, $120-$122), compute worst-case
+        deceleration timeout, and send CMD:SET_DECEL_MS:<ms> to the ESP32 interface.
+        """
+        self.read_grbl_settings()
+        timeout_s = self.compute_decel_timeout_s(
+            self.grbl_max_rates,
+            self.grbl_accels,
+            margin_s=0.85,
+        )
+        timeout_ms = int(round(timeout_s * 1000.0))
+        timeout_ms = max(500, min(15000, timeout_ms))
+        cmd = f"CMD:SET_DECEL_MS:{timeout_ms}"
+        if self.esp32_interface is not None and hasattr(self.esp32_interface, "send_command"):
+            self.esp32_interface.send_command(cmd)
+        logger.info(
+            f"Synchronized ESP32 kinematic decel wait to {timeout_ms} ms "
+            f"(rates={self.grbl_max_rates}, accels={self.grbl_accels})."
+        )
+        return timeout_ms
 
     # ==========================================================================
     # G-code and Motion Control
@@ -197,9 +327,10 @@ class GRBLHardwareController:
         self.command_history.append(cmd)
 
         if self.mode == "real_serial" and self.serial_conn is not None:
-            self.serial_conn.write(f"{cmd}\n".encode("utf-8"))
-            resp = self.serial_conn.readline().decode("utf-8")
-            return resp
+            with self.serial_lock:
+                self.serial_conn.write(f"{cmd}\n".encode("utf-8"))
+                resp = self.serial_conn.readline().decode("utf-8")
+                return resp
         else:
             # Software emulator processing
             self._emulator_process_gcode(cmd)
@@ -321,8 +452,9 @@ class GRBLHardwareController:
         # Transmit override bytes and update internal shadow override state
         self.sent_bytes_history.append(override_bytes)
         if self.mode == "real_serial" and self.serial_conn is not None:
-            self.serial_conn.write(override_bytes)
-            self.serial_conn.flush()
+            with self.serial_lock:
+                self.serial_conn.write(override_bytes)
+                self.serial_conn.flush()
         self._emulator_process_override_bytes(override_bytes)
 
         res_info = {
@@ -383,19 +515,20 @@ class GRBLHardwareController:
             Dict containing state, mpos, feed, spindle, ov_feed, ov_spindle, and raw string.
         """
         if self.mode == "real_serial" and self.serial_conn is not None:
-            self.serial_conn.write(self.CMD_STATUS_REPORT)
-            self.serial_conn.flush()
+            with self.serial_lock:
+                self.serial_conn.write(self.CMD_STATUS_REPORT)
+                self.serial_conn.flush()
 
-            raw = ""
-            for _ in range(5):
-                raw_bytes = self.serial_conn.readline()
-                if isinstance(raw_bytes, (bytes, bytearray)):
-                    line = raw_bytes.decode("utf-8", errors="ignore").strip()
-                else:
-                    line = str(raw_bytes).strip()
-                if line.startswith("<") and line.endswith(">"):
-                    raw = line
-                    break
+                raw = ""
+                for _ in range(5):
+                    raw_bytes = self.serial_conn.readline()
+                    if isinstance(raw_bytes, (bytes, bytearray)):
+                        line = raw_bytes.decode("utf-8", errors="ignore").strip()
+                    else:
+                        line = str(raw_bytes).strip()
+                    if line.startswith("<") and line.endswith(">"):
+                        raw = line
+                        break
 
             feed_val = float(self.current_f * self.speed_factor)
             spindle_val = float(self.current_s * self.speed_factor)
@@ -455,19 +588,7 @@ class GRBLHardwareController:
                 "raw": raw,
             }
 
-    @staticmethod
-    def compute_decel_timeout_s(
-        max_rate_mm_min: float = 1000.0,
-        accel_mm_s2: float = 10.0,
-        margin_s: float = 0.833,
-    ) -> float:
-        """
-        Compute worst-case kinematic axis deceleration timeout from GRBL $110 and $120
-        plus safety margin, synchronized with ESP32 SPINDLE_DECEL_WAIT_MS (2500 ms).
-        """
-        if accel_mm_s2 <= 0.0:
-            raise ValueError(f"accel_mm_s2 must be positive, got {accel_mm_s2}")
-        return (float(max_rate_mm_min) / 60.0) / float(accel_mm_s2) + float(margin_s)
+    compute_decel_timeout_s = _HybridDecelMethod()
 
     def emergency_stop(
         self,
@@ -478,60 +599,58 @@ class GRBLHardwareController:
         Execute Stop Category 1 emergency shutdown sequence:
         1. Send immediate Feed Hold ('!') and flush to decelerate axes.
         2. In real_serial mode, poll query_status() every poll_interval_s (up to max_poll_s,
-           defaulting to kinematic decel timeout from $110/$120 ~= 2.50 s)
+           defaulting to worst-case kinematic decel timeout across X/Y/Z from $110-$112/$120-$122)
            until GRBL confirms 'Hold:0', 'Idle', or feed <= 1e-3.
         3. Only after axes stop (or safety timeout), command ESP32 SSR OFF (CMD:OFF)
            followed by GRBL Soft Reset (0x18).
         """
         if max_poll_s is None:
-            max_poll_s = self.compute_decel_timeout_s(
-                self.grbl_max_rate_mm_min,
-                self.grbl_accel_mm_s2,
-            )
+            max_poll_s = self.compute_decel_timeout_s()
 
         self.emergency_stop_log = []
 
         if self.mode == "real_serial" and self.serial_conn is not None:
-            # Step 1: Immediate hardware Feed Hold
-            self.serial_conn.write(self.CMD_FEED_HOLD)
-            self.serial_conn.flush()
-            self.emergency_stop_log.append("FEED_HOLD_SENT")
+            with self.serial_lock:
+                # Step 1: Immediate hardware Feed Hold
+                self.serial_conn.write(self.CMD_FEED_HOLD)
+                self.serial_conn.flush()
+                self.emergency_stop_log.append("FEED_HOLD_SENT")
 
-            # Step 2: Poll GRBL status until axes stop decelerating
-            poll_start = time.monotonic()
-            axes_stopped = False
-            while True:
-                status = self.query_status()
-                raw_frame = status.get("raw", None)
-                valid_reply = (raw_frame is None) or bool(raw_frame)
-                state_str = str(status.get("state", ""))
-                feed_val = float(status.get("feed", 0.0))
+                # Step 2: Poll GRBL status until axes stop decelerating
+                poll_start = time.monotonic()
+                axes_stopped = False
+                while True:
+                    status = self.query_status()
+                    raw_frame = status.get("raw", None)
+                    valid_reply = (raw_frame is None) or bool(raw_frame)
+                    state_str = str(status.get("state", ""))
+                    feed_val = float(status.get("feed", 0.0))
 
-                if valid_reply and (state_str in ("Hold:0", "Idle") or feed_val <= 1e-3):
-                    axes_stopped = True
-                    break
+                    if valid_reply and (state_str in ("Hold:0", "Idle") or feed_val <= 1e-3):
+                        axes_stopped = True
+                        break
 
-                if time.monotonic() - poll_start >= max_poll_s:
-                    logger.warning(
-                        f"Emergency stop poll timed out after {max_poll_s:.2f}s "
-                        f"(last state={state_str!r}, feed={feed_val:.2f}). Proceeding with SSR cutoff."
-                    )
-                    break
+                    if time.monotonic() - poll_start >= max_poll_s:
+                        logger.warning(
+                            f"Emergency stop poll timed out after {max_poll_s:.2f}s "
+                            f"(last state={state_str!r}, feed={feed_val:.2f}). Proceeding with SSR cutoff."
+                        )
+                        break
 
-                time.sleep(poll_interval_s)
+                    time.sleep(poll_interval_s)
 
-            self.emergency_stop_log.append(
-                "AXES_STOPPED_VERIFIED" if axes_stopped else "AXES_STOP_TIMEOUT"
-            )
+                self.emergency_stop_log.append(
+                    "AXES_STOPPED_VERIFIED" if axes_stopped else "AXES_STOP_TIMEOUT"
+                )
 
-            # Step 3: Cut SSRs only after axes stop, then issue Soft Reset (0x18)
-            self.grbl_state = "Hold"
-            self.set_machine_state("OFF")
-            self.emergency_stop_log.append("SSR_OFF_SENT")
+                # Step 3: Cut SSRs only after axes stop, then issue Soft Reset (0x18)
+                self.grbl_state = "Hold"
+                self.set_machine_state("OFF")
+                self.emergency_stop_log.append("SSR_OFF_SENT")
 
-            self.serial_conn.write(self.CMD_SOFT_RESET)
-            self.serial_conn.flush()
-            self.emergency_stop_log.append("SOFT_RESET_SENT")
+                self.serial_conn.write(self.CMD_SOFT_RESET)
+                self.serial_conn.flush()
+                self.emergency_stop_log.append("SOFT_RESET_SENT")
         else:
             self.emergency_stop_log.append("FEED_HOLD_SENT")
             self.grbl_state = "Hold"

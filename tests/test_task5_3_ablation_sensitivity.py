@@ -298,11 +298,8 @@ def run_phase5_cdi_sensitivity(
     Parametric sensitivity analysis of CDI threshold theta_th in
     [0.02, 0.05, 0.08, 0.10, 0.12, 0.15, 0.18, 0.22, 0.35, 0.50]
     evaluated across 10 validation seeds (VAL_SEEDS = [201..210]).
-    Demonstrates the communication overhead vs. schedule optimality trade-off,
-    classifying operating regions objectively against N_shocks = 2.0 discrete macro-shocks:
-    - calls_m > 2.0: Over-Triggering Region (> 2 Shocks)
-    - 1.0 <= calls_m <= 2.0: Event-Matched Plateau (1–2 Shocks)
-    - calls_m < 1.0: Under-Triggering Region (< 1 Shock)
+    Quantifies the continuous Pareto trade-off between Cloud Warm-Start resync calls,
+    schedule performance, and weighted system cost index.
 
     Shared simulation with Task 4.3 Full HIL closed-loop evaluation engine (Mode 5).
     """
@@ -349,14 +346,6 @@ def run_phase5_cdi_sensitivity(
         # Total System Cost Index (incorporating cloud communication and computation overhead)
         total_sys_cost_idx = 0.45 * (cmax_m / cmax_nominal) + 0.45 * (cost_m / cost_nominal) + 0.10 * (calls_m / 10.0)
 
-        # Objective operating zone classification strictly anchored to N_shocks = 2.0 macro-disturbances
-        if calls_m > 2.0:
-            zone = "Over-Triggering Region (> 2 Shocks)"
-        elif calls_m >= 1.0:
-            zone = "Event-Matched Plateau (1–2 Shocks)"
-        else:
-            zone = "Under-Triggering Region (< 1 Shock)"
-
         rec = {
             "CDI_Threshold": th,
             "Cloud_Calls_Mean": round(calls_m, 2),
@@ -371,16 +360,14 @@ def run_phase5_cdi_sensitivity(
             "Max_CDI_Std": round(max_cdi_s, 4),
             "Schedule_Composite_Index": round(sched_composite_idx, 4),
             "Total_System_Cost_Index": round(total_sys_cost_idx, 4),
-            "Weighted_Cost": round(sched_composite_idx, 4),
             "Comm_Overhead (s)": round(comm_overhead_s, 4),
-            "Zone": zone,
         }
         records.append(rec)
 
         if verbose:
             print(
                 f"[CDI Sensitivity] theta_th={th:4.2f} | Calls: {calls_m:5.2f} ± {calls_s:4.2f} | "
-                f"Cmax: {cmax_m:5.2f}m | Cost: ${cost_m:5.3f} | SysCost: {total_sys_cost_idx:.4f} | {zone}"
+                f"Cmax: {cmax_m:5.2f}m | Cost: ${cost_m:5.3f} | SchedIdx: {sched_composite_idx:.4f} | SysCost: {total_sys_cost_idx:.4f}"
             )
 
     headers = list(records[0].keys())
@@ -569,64 +556,53 @@ def plot_phase5_ablation_and_sensitivity(
     y_twin_max = max(max(total_sys_costs), max(sched_composite)) + 0.14
     ax2_twin.set_ylim(y_twin_min, y_twin_max)
 
-    # Dynamically extract objective N_shocks=2.0 zone boundaries from sensitivity_rows
-    over_ths = [float(r["CDI_Threshold"]) for r in sensitivity_rows if r.get("Zone") == "Over-Triggering Region (> 2 Shocks)"]
-    plateau_ths = [float(r["CDI_Threshold"]) for r in sensitivity_rows if r.get("Zone") == "Event-Matched Plateau (1–2 Shocks)"]
-    drift_ths = [float(r["CDI_Threshold"]) for r in sensitivity_rows if r.get("Zone") == "Under-Triggering Region (< 1 Shock)"]
-
-    min_plateau_th = min(plateau_ths) if plateau_ths else 0.08
-    max_plateau_th = max(plateau_ths) if plateau_ths else 0.15
-    drift_min_th = min(drift_ths) if drift_ths else 0.18
-    left_bound = 0.5 * (max(over_ths) + min_plateau_th) if over_ths else (min_plateau_th - 0.015)
-    right_bound = 0.5 * (max_plateau_th + drift_min_th) if drift_ths else (max_plateau_th + 0.015)
-
-    # Shaded Zones aligned identically with CSV Zone classifications
-    ax2.axvspan(0.015, left_bound, color="#E74C3C", alpha=0.10, label="Over-Triggering (> 2 Shocks)")
-    ax2.axvspan(
-        left_bound,
-        right_bound,
-        color="#2ECC71",
-        alpha=0.14,
-        label=f"Event-Matched Plateau ({min_plateau_th:.2f}–{max_plateau_th:.2f})",
-    )
-    ax2.axvspan(right_bound, 0.52, color="#F39C12", alpha=0.10, label="Under-Triggering (< 1 Shock)")
-
-    # Degradation Cliff Marker
-    ax2.axvline(right_bound, color="#E67E22", linestyle=":", linewidth=2.0, alpha=0.85)
-    ax2.annotate(
-        f"Degradation Cliff\n(Under-Triggering: θ_th ≥ {drift_min_th:.2f})",
-        xy=(right_bound, 0.58 * max_calls_upper),
-        xytext=(right_bound + 0.03, 0.72 * max_calls_upper),
-        arrowprops=dict(facecolor="#E67E22", edgecolor="black", arrowstyle="->", lw=1.2),
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="#FEF9E7", edgecolor="#E67E22", linewidth=1.0),
-        fontsize=7.6, fontweight="bold", color="#B9770E"
-    )
-
-    # Dynamically identify exact empirical minimum on Total System Cost Index U-curve
+    # Mark two clear trade-off operating points without arbitrary background zone shading:
+    # (1) Empirical optimum theta_th* under (w_C=0.45, w_E=0.45, w_comm=0.10)
     opt_idx = int(np.argmin(total_sys_costs))
     opt_th = th_vals[opt_idx]
     opt_calls = cloud_calls[opt_idx]
     opt_sys_cost = total_sys_costs[opt_idx]
     ax2_twin.plot(opt_th, opt_sys_cost, marker="*", markersize=15, color="#F1C40F", markeredgecolor="black", markeredgewidth=1.2, zorder=10)
-    ax2.axvline(opt_th, color="#27AE60", linestyle="--", linewidth=1.8, alpha=0.85)
+    ax2.axvline(opt_th, color="#27AE60", linestyle="--", linewidth=1.6, alpha=0.80)
 
-    # Honest trade-off annotation pointing strictly to empirical minimum & exact plateau bounds
+    # (2) Deployment operating point theta_th = 0.12 (prioritizing Cloud call & TOU cost reduction)
+    sel_idx = th_vals.index(0.12)
+    sel_calls = cloud_calls[sel_idx]
+    sel_sys_cost = total_sys_costs[sel_idx]
+    sel_cost_usd = costs[sel_idx]
+    opt_cost_usd = costs[opt_idx]
+    call_diff_pct = (opt_calls - sel_calls) / opt_calls * 100.0 if opt_calls > 0 else 0.0
+    cost_diff_pct = (opt_cost_usd - sel_cost_usd) / opt_cost_usd * 100.0 if opt_cost_usd > 0 else 0.0
+
+    ax2_twin.plot(0.12, sel_sys_cost, marker="D", markersize=9.5, color="#16A085", markeredgecolor="black", markeredgewidth=1.1, zorder=10)
+    ax2.axvline(0.12, color="#16A085", linestyle=":", linewidth=1.8, alpha=0.85)
+
     ax2_twin.annotate(
-        f"Empirical Optimum (θ_th* = {opt_th:.2f}):\n"
-        f"• Minimum Total System Cost Index ({opt_sys_cost:.4f}, calls={opt_calls:.2f})\n"
-        f"• Event-Matched Plateau θ_th in [{min_plateau_th:.2f}, {max_plateau_th:.2f}] (1–2 Shocks)\n"
-        f"  ({makespans[th_vals.index(min_plateau_th)]:.1f}m–{makespans[th_vals.index(max_plateau_th)]:.1f}m; "
-        f"θ=0.12 -> {cloud_calls[th_vals.index(0.12)]:.2f} calls)\n"
-        f"• θ_th ≥ {drift_min_th:.2f} drops < 1 call & degrades Makespan to {makespans[-1]:.1f}m",
+        f"Empirical Optimum (θ_th* = {opt_th:.2f}, w_C=0.45, w_E=0.45, w_comm=0.10):\n"
+        f"• Minimum Total System Cost Index = {opt_sys_cost:.4f} (calls={opt_calls:.2f}, "
+        f"Cmax={makespans[opt_idx]:.2f}m, TOU=${opt_cost_usd:.3f})",
         xy=(opt_th, opt_sys_cost),
-        xytext=(0.18, y_twin_min + 0.015),
-        arrowprops=dict(facecolor="#27AE60", edgecolor="black", arrowstyle="->", lw=1.5),
-        bbox=dict(boxstyle="round,pad=0.45", facecolor="#EAFAF1", edgecolor="#27AE60", linewidth=1.2),
-        fontsize=7.4, fontweight="bold", color="#145A32"
+        xytext=(0.15, y_twin_max - 0.045),
+        arrowprops=dict(facecolor="#27AE60", edgecolor="black", arrowstyle="->", lw=1.3),
+        bbox=dict(boxstyle="round,pad=0.35", facecolor="#EAFAF1", edgecolor="#27AE60", linewidth=1.1),
+        fontsize=7.3, fontweight="bold", color="#145A32"
+    )
+
+    ax2_twin.annotate(
+        f"Deployment Configuration (θ_th = 0.12):\n"
+        f"• Prioritizes Cloud load & TOU cost reduction over θ_th*={opt_th:.2f}\n"
+        f"  ({sel_calls:.2f} vs. {opt_calls:.2f} calls [-{call_diff_pct:.1f}%]; "
+        f"TOU ${sel_cost_usd:.3f} vs. ${opt_cost_usd:.3f} [-{cost_diff_pct:.1f}%])\n"
+        f"• Trades +{makespans[sel_idx] - makespans[opt_idx]:.2f}m makespan ({makespans[sel_idx]:.2f}m vs. {makespans[opt_idx]:.2f}m)",
+        xy=(0.12, sel_sys_cost),
+        xytext=(0.17, y_twin_min + 0.015),
+        arrowprops=dict(facecolor="#16A085", edgecolor="black", arrowstyle="->", lw=1.3),
+        bbox=dict(boxstyle="round,pad=0.38", facecolor="#E8F8F5", edgecolor="#16A085", linewidth=1.1),
+        fontsize=7.3, fontweight="bold", color="#0E6251"
     )
 
     ax2.set_xlabel("Cumulative Disturbance Index Threshold (θ_th)", fontsize=10.5, fontweight="bold")
-    ax2.set_title("(b) CDI Threshold Sensitivity & Knee Point Trade-Off", fontsize=11.5, fontweight="bold", pad=12)
+    ax2.set_title("(b) Continuous CDI Threshold Pareto / Trade-Off Curve", fontsize=11.5, fontweight="bold", pad=12)
     ax2.set_xticks(th_vals)
     ax2.set_xticklabels([f"{v:.2f}" for v in th_vals], fontsize=8.2, rotation=25)
     ax2.set_xlim(0.01, 0.52)
@@ -706,6 +682,7 @@ def test_phase5_cdi_sensitivity_csv_existence_and_schema():
     assert thresholds == expected_th, f"Threshold points must match {expected_th}."
     assert "Schedule_Composite_Index" in rows[0], "Schedule_Composite_Index must be present."
     assert "Total_System_Cost_Index" in rows[0], "Total_System_Cost_Index must be present."
+    assert "Zone" not in rows[0], "Arbitrary Zone classification column must be removed."
 
 
 def test_phase5_figure_generation_and_properties():

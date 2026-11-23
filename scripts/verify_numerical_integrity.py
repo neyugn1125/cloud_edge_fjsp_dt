@@ -189,6 +189,7 @@ def verify_cdi_sensitivity_variation():
         rows = list(csv.DictReader(f))
 
     assert len(rows) == 10, f"Expected 10 thresholds in grid, got {len(rows)}"
+    assert "Zone" not in rows[0], "Arbitrary Zone classification column must not exist in CDI CSV"
 
     thresholds = [float(r["CDI_Threshold"]) for r in rows]
     makespans = [float(r["Makespan_Mean (min)"]) for r in rows]
@@ -322,11 +323,13 @@ def verify_markdown_concordance():
         # 7. Zero Breakdowns Guarantee
         assert "0.00" in text, f"Expected zero breakdowns not found in {fname}"
 
-        # 8. Measured Fast Heuristic Resync Latency Concordance & Ban "statistical equivalence"
+        # 8. Measured Fast Heuristic Resync Latency Concordance & Ban "statistical equivalence" / arbitrary Zone labels
         assert "0.214" in text, f"Expected measured Fast Heuristic Resync latency 0.214 ms not found in {fname}"
         assert "statistical equivalence" not in text.lower(), (
             f"Invalid claim 'statistical equivalence' found in {fname}; use 'no statistically significant difference'"
         )
+        for banned_zone in ["Event-Matched Plateau", "Over-Triggering Region", "Under-Triggering Region"]:
+            assert banned_zone not in text, f"Arbitrary zone label '{banned_zone}' found in {fname}"
 
         # 9. Exact CSV Concordance for All 5 HIL Modes (unrounded %.2f means + std + Wilcoxon)
         with open("data/benchmarks/phase4_hil_metrics.csv", "r", encoding="utf-8") as f4:
